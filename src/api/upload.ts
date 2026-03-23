@@ -8,7 +8,7 @@ export function uploadFile(
   const formData = new FormData()
   formData.append('file', file)
 
-  return request.post('/upload', formData, {
+  return request.post('/file/upload', formData, {
     headers: { 'Content-Type': 'multipart/form-data' },
     onUploadProgress: (event) => {
       if (event.total) {
@@ -20,9 +20,9 @@ export function uploadFile(
 }
 
 export function deleteFile(id: string): Promise<void> {
-  return request.delete(`/upload/${id}`)
+  return request.delete(`/file/upload/${id}`)
 }
 
 export function listFiles(): Promise<UploadResponse[]> {
-  return request.get('/upload')
+  return request.get('/file/upload')
 }
