@@ -13,11 +13,9 @@ export default defineConfig({
   server: {
     proxy: {
       // 把以 /api 开头的请求转发到后端 http://localhost:8080
-      // 并去掉前缀 /api -> 后端收到 /file/upload
       '/api': {
         target: 'http://localhost:8080',
         changeOrigin: true,
-        // rewrite: (path) => path.replace(/^\/api/, ''),
       },
     },
   },
