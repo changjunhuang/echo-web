@@ -235,12 +235,19 @@ async function handleSend() {
   const lastMsg = session.messages[session.messages.length - 1]
   lastMsg.content = ''
 
+  const messageString = session.messages
+    .filter((m) => m.id !== assistantMsg.id)
+    .filter((m) => m.content && m.content.trim().length > 0)
+    .map((m) => {
+      const roleLabel = m.role === 'user' ? 'User' : m.role === 'assistant' ? 'Assistant' : 'System'
+      return `${roleLabel}: ${m.content}`
+    })
+    .join('\n\n')
+
   abortController = sendChatMessageStream(
     {
       model: chatStore.selectedModel,
-      messages: session.messages
-        .filter((m) => m.id !== assistantMsg.id)
-        .map((m) => ({ role: m.role, content: m.content })),
+      Message: messageString,
     },
     async (chunk) => {
       chatStore.appendToLastAssistantMessage(sessionId, chunk)

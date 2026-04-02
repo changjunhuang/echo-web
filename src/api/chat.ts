@@ -14,7 +14,7 @@ export function sendChatMessageStream(
   const controller = new AbortController()
   const baseURL = import.meta.env.VITE_API_BASE_URL || '/api'
 
-  fetch(`${baseURL}/chat/completions`, {
+  fetch(`${baseURL}/chat`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ ...payload, stream: true }),
