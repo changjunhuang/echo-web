@@ -239,7 +239,7 @@ async function handleSend() {
     .filter((m) => m.id !== assistantMsg.id)
     .filter((m) => m.content && m.content.trim().length > 0)
     .map((m) => {
-      const roleLabel = m.role === 'user' ? 'User' : m.role === 'assistant' ? 'Assistant' : 'System'
+      const roleLabel = m.role === 'user' ? 'user' : m.role === 'assistant' ? 'assistant' : 'system'
       return `${roleLabel}: ${m.content}`
     })
     .join('\n\n')
@@ -247,7 +247,7 @@ async function handleSend() {
   abortController = sendChatMessageStream(
     {
       model: chatStore.selectedModel,
-      Message: messageString,
+      message: messageString,
     },
     async (chunk) => {
       chatStore.appendToLastAssistantMessage(sessionId, chunk)

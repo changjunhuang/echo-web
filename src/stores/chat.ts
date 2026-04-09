@@ -3,7 +3,7 @@ import { ref, computed } from 'vue'
 import { nanoid } from 'nanoid'
 import type { Message, ChatSession } from '@/types/chat'
 
-const DEFAULT_MODEL = import.meta.env.VITE_DEFAULT_CHAT_MODEL || 'gpt-4o'
+const DEFAULT_MODEL = import.meta.env.VITE_DEFAULT_CHAT_MODEL || null
 
 export const useChatStore = defineStore('chat', () => {
   const sessions = ref<ChatSession[]>([])
