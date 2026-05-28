@@ -32,27 +32,14 @@ export function sendChatMessageStream(
         return
       }
       const processStream = async () => {
-        let fullContent = ''
-        let parsedSuccessfully = false
         while (true) {
           const { done, value } = await reader.read()
           if (done) {
-            if (!parsedSuccessfully && fullContent) {
-              try {
-                const parsed = JSON.parse(fullContent)
-                const content = parsed.reply || ''
-                if (content) onChunk(content)
-              } catch {
-                // ignore
-              }
-            }
             onDone()
             break
           }
           const text = decoder.decode(value, { stream: true })
-          fullContent += text
           const lines = text.split('\n').filter((l) => l.trim())
-          console.log("lines:",lines)
           for (const line of lines) {
             if (line.startsWith('data: ')) {
               const data = line.slice(6)
@@ -62,23 +49,8 @@ export function sendChatMessageStream(
               }
               try {
                 const parsed = JSON.parse(data)
-                // 兼容 OpenAI 格式的 content 以及自定义后端的 reply 字段
-                const content = parsed.choices?.[0]?.delta?.content || parsed.reply || ''
-                if (content) {
-                  onChunk(content)
-                  parsedSuccessfully = true
-                }
-              } catch {
-                // ignore parse errors
-              }
-            } else {
-              try {
-                const parsed = JSON.parse(line)
-                const content = parsed.reply || ''
-                if (content) {
-                  onChunk(content)
-                  parsedSuccessfully = true
-                }
+                const content = parsed.choices?.[0]?.delta?.content || ''
+                if (content) onChunk(content)
               } catch {
                 // ignore parse errors
               }

@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm install *)",
+      "Bash(npm run *)",
+      "Bash(curl -s http://localhost:8080/file/upload/token)",
+      "Bash(taskkill /F /IM node.exe)",
+      "Bash(git checkout *)",
+      "Bash(git rm *)",
+      "Bash(git restore *)"
+    ]
+  }
+}

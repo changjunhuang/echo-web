@@ -247,7 +247,7 @@ async function handleSend() {
   abortController = sendChatMessageStream(
     {
       model: chatStore.selectedModel,
-      message: messageString,
+      Message: messageString,
     },
     async (chunk) => {
       chatStore.appendToLastAssistantMessage(sessionId, chunk)

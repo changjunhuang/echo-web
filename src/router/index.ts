@@ -4,23 +4,11 @@ import type { RouteRecordRaw } from 'vue-router'
 const routes: RouteRecordRaw[] = [
   {
     path: '/',
-    redirect: '/models',
-  },
-  {
-    path: '/models',
-    component: () => import('@/layouts/DefaultLayout.vue'),
-    children: [
-      {
-        path: '',
-        name: 'Models',
-        component: () => import('@/views/models/ModelsPage.vue'),
-        meta: { title: '模型广场' },
-      },
-    ],
+    redirect: '/chat',
   },
   {
     path: '/chat',
-    component: () => import('@/layouts/DefaultLayout.vue'),
+    component: () => import('@/layouts/AdminLayout.vue'),
     children: [
       {
         path: '',
@@ -48,7 +36,7 @@ const routes: RouteRecordRaw[] = [
   },
   {
     path: '/:pathMatch(.*)*',
-    redirect: '/models',
+    redirect: '/chat',
   },
 ]
 

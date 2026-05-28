@@ -7,10 +7,30 @@
       </div>
     </div>
 
+    <!-- Config warning -->
+    <div v-if="!isQiniuBackendConfigured" class="config-warning">
+      <el-icon :size="20"><WarningFilled /></el-icon>
+      <div class="config-warning-content">
+        <p class="config-warning-title">七牛云配置未完成</p>
+        <p class="config-warning-desc">
+          请在 <code>.env</code> 文件中配置以下七牛云后端接口地址：
+        </p>
+        <ul class="config-warning-list">
+          <li><code>VITE_API_BASE_URL</code> - API 后端地址（确保后端已配置七牛云参数）</li>
+        </ul>
+        <p class="config-warning-desc" style="margin-top: 12px;">
+          后端需要实现 <code>/file/upload/token</code> 接口，返回七牛云上传凭证
+        </p>
+      </div>
+    </div>
+
     <!-- Upload zone -->
     <div
       class="upload-zone"
-      :class="{ 'upload-zone--dragging': isDragging, 'upload-zone--disabled': isUploading }"
+      :class="{
+        'upload-zone--dragging': isDragging,
+        'upload-zone--disabled': !isQiniuBackendConfigured || isUploading
+      }"
       @dragover.prevent="isDragging = true"
       @dragleave.prevent="isDragging = false"
       @drop.prevent="handleDrop"
@@ -28,9 +48,9 @@
           <el-icon :size="40"><UploadFilled /></el-icon>
         </div>
         <p class="upload-text">点击或拖拽文件到此区域上传</p>
-        <p class="upload-hint">支持单次上传多个文件，单个文件不超过 100MB</p>
-        <el-button type="primary" class="upload-btn" :loading="isUploading">
-          {{ isUploading ? '上传中...' : '选择文件' }}
+        <p class="upload-hint">支持单次上传多个文件，单个文件最大 2GB</p>
+        <el-button type="primary" class="upload-btn" :disabled="!isQiniuBackendConfigured">
+          {{ isQiniuBackendConfigured ? '选择文件' : '请先配置后端API' }}
         </el-button>
       </div>
     </div>
@@ -54,7 +74,18 @@
         <span class="stat-label">总大小</span>
       </div>
       <div class="stat-actions">
-        <el-button size="small" type="danger" plain @click="clearAll">清空记录</el-button>
+        <el-button size="small" type="danger" plain @click="clearAll" :disabled="isUploading">
+          清空记录
+        </el-button>
+        <el-button
+          size="small"
+          type="primary"
+          plain
+          @click="uploadAllPending"
+          :disabled="isUploading || pendingCount === 0 || !isQiniuBackendConfigured"
+        >
+          上传全部 ({{ pendingCount }})
+        </el-button>
       </div>
     </div>
 
@@ -73,7 +104,7 @@
           v-for="file in uploadStore.files"
           :key="file.id"
           class="file-item"
-          :class="`file-item--${file.status}`"
+          :class="`file-item--${getFilePrimaryStatus(file)}`"
         >
           <div class="file-icon">
             <el-icon :size="20">
@@ -83,14 +114,16 @@
 
           <div class="file-info">
             <span class="file-name" :title="file.name">{{ file.name }}</span>
-            <div v-if="file.status === 'uploading'" class="file-progress">
+            <div v-if="file.status === 'uploading_qiniu' || file.status === 'uploading_backend'" class="file-progress">
               <el-progress
                 :percentage="file.progress"
                 :stroke-width="4"
                 :show-text="false"
                 status="active"
               />
-              <span class="progress-text">{{ file.progress }}%</span>
+              <span class="progress-text">
+                {{ file.status === 'uploading_qiniu' ? '上传七牛云' : '通知后端' }} {{ file.progress }}%
+              </span>
             </div>
             <span v-if="file.error" class="file-error">{{ file.error }}</span>
           </div>
@@ -104,44 +137,48 @@
           <div class="file-status">
             <span
               class="status-badge"
-              :class="`status-badge--${file.status}`"
+              :class="`status-badge--${getFilePrimaryStatus(file)}`"
             >
-              <el-icon v-if="file.status === 'success'"><CircleCheckFilled /></el-icon>
-              <el-icon v-else-if="file.status === 'error'"><CircleCloseFilled /></el-icon>
-              <el-icon v-else-if="file.status === 'uploading'"
-                ><Loading class="is-loading"
-              /></el-icon>
+              <el-icon v-if="getFilePrimaryStatus(file) === 'success'"><CircleCheckFilled /></el-icon>
+              <el-icon v-else-if="getFilePrimaryStatus(file) === 'error'"><CircleCloseFilled /></el-icon>
+              <el-icon v-else-if="file.status === 'uploading_qiniu' || file.status === 'uploading_backend'">
+                <Loading class="is-loading" />
+              </el-icon>
               <el-icon v-else><Clock /></el-icon>
-              {{ statusText[file.status] }}
+              {{ statusText[getFilePrimaryStatus(file)] }}
             </span>
           </div>
 
           <div class="file-actions">
             <el-button
-              v-if="file.status === 'error' || file.status === 'pending'"
+              v-if="getFilePrimaryStatus(file) === 'error'"
               size="small"
               type="primary"
               plain
-              :icon="Upload"
+              :icon="Refresh"
               @click="retryUpload(file)"
-              >重试</el-button
             >
+              重试
+            </el-button>
             <el-button
               v-if="file.url"
               size="small"
               plain
               :icon="View"
               @click="openFile(file.url!)"
-              >查看</el-button
             >
+              查看
+            </el-button>
             <el-button
               size="small"
               type="danger"
               plain
               :icon="Delete"
               @click="removeFile(file.id)"
-              >删除</el-button
+              :disabled="file.status === 'uploading_qiniu' || file.status === 'uploading_backend'"
             >
+              删除
+            </el-button>
           </div>
         </div>
       </div>
@@ -156,7 +193,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   UploadFilled,
@@ -169,29 +206,45 @@ import {
   CircleCloseFilled,
   Loading,
   Clock,
-  Upload,
+  Refresh,
   View,
   Delete,
+  WarningFilled,
 } from '@element-plus/icons-vue'
+import * as qiniu from 'qiniu-js'
 import { useUploadStore } from '@/stores/upload'
-import { uploadFile } from '@/api/upload'
+import { getUploadToken, notifyUploadSuccess } from '@/api/upload'
 import type { UploadFile } from '@/types/upload'
 
 const uploadStore = useUploadStore()
 const fileInputRef = ref<HTMLInputElement | null>(null)
 const isDragging = ref(false)
 const isUploading = ref(false)
+const isQiniuBackendConfigured = ref(false)
 
-const statusText: Record<UploadFile['status'], string> = {
+const statusText: Record<string, string> = {
   pending: '等待上传',
-  uploading: '上传中',
+  uploading_qiniu: '上传七牛云',
+  uploading_backend: '通知后端',
   success: '已上传',
   error: '上传失败',
 }
 
-const successCount = computed(() => uploadStore.files.filter((f) => f.status === 'success').length)
-const errorCount = computed(() => uploadStore.files.filter((f) => f.status === 'error').length)
+onMounted(() => {
+  isQiniuBackendConfigured.value = true
+})
+
+const successCount = computed(() => uploadStore.files.filter((f) => getFilePrimaryStatus(f) === 'success').length)
+const errorCount = computed(() => uploadStore.files.filter((f) => getFilePrimaryStatus(f) === 'error').length)
+const pendingCount = computed(() => uploadStore.files.filter((f) => f.status === 'pending').length)
 const totalSize = computed(() => uploadStore.files.reduce((sum, f) => sum + f.size, 0))
+
+function getFilePrimaryStatus(file: UploadFile): string {
+  if (file.status === 'error') return 'error'
+  if (file.status === 'success') return 'success'
+  if (file.status === 'uploading_qiniu' || file.status === 'uploading_backend') return 'uploading'
+  return 'pending'
+}
 
 function formatSize(bytes: number): string {
   if (bytes === 0) return '0 B'
@@ -218,7 +271,9 @@ function getFileIcon(type: string) {
 }
 
 function triggerFileInput() {
-  fileInputRef.value?.click()
+  if (isQiniuBackendConfigured.value) {
+    fileInputRef.value?.click()
+  }
 }
 
 function handleFileInputChange(e: Event) {
@@ -238,10 +293,15 @@ function handleDrop(e: DragEvent) {
 async function handleFiles(files: File[]) {
   if (files.length === 0) return
 
-  const MAX_SIZE = 100 * 1024 * 1024 // 100MB
+  if (files.length > 10) {
+    ElMessage.warning('最多同时上传 10 个文件')
+    files = files.slice(0, 10)
+  }
+
+  const MAX_SIZE = 2 * 1024 * 1024 * 1024 // 2GB
   const validFiles = files.filter((f) => {
     if (f.size > MAX_SIZE) {
-      ElMessage.warning(`文件 "${f.name}" 超过 100MB 限制，已跳过`)
+      ElMessage.warning(`文件 "${f.name}" 超过 2GB 限制，已跳过`)
       return false
     }
     return true
@@ -249,35 +309,116 @@ async function handleFiles(files: File[]) {
 
   if (validFiles.length === 0) return
 
+  for (const file of validFiles) {
+    uploadStore.addFile(file)
+  }
+
+  await processUploads()
+}
+
+async function processUploads() {
+  const pendingFiles = uploadStore.files.filter((f) => f.status === 'pending')
+  if (pendingFiles.length === 0) return
+
   isUploading.value = true
-  const uploadPromises = validFiles.map((file) => doUpload(file))
+
+  const uploadPromises = pendingFiles.slice(0, 10).map((file) => doUpload(file))
   await Promise.allSettled(uploadPromises)
+
   isUploading.value = false
 }
 
-async function doUpload(file: File) {
-  const uploadEntry = uploadStore.addFile(file)
-  uploadStore.updateFileStatus(uploadEntry.id, { status: 'uploading', progress: 0 })
+async function uploadAllPending() {
+  await processUploads()
+}
+
+async function doUpload(file: UploadFile) {
+  // 从 store 获取原始 File 对象
+  const fileBlob = uploadStore.getFileBlob(file.id)
+  if (!fileBlob) {
+    uploadStore.updateFileStatus(file.id, { status: 'error', error: '文件对象丢失' })
+    return
+  }
+
+  uploadStore.updateFileStatus(file.id, { status: 'uploading_qiniu', progress: 0 })
 
   try {
-    const result = await uploadFile(file, (progress) => {
-      uploadStore.updateFileStatus(uploadEntry.id, { progress })
+    // 调用后端接口获取七牛云上传凭证
+    const tokenRes = await getUploadToken(file.name, file.size, file.type)
+    const { token, key, domain } = tokenRes
+
+    const observable = qiniu.upload(fileBlob, key, token, {
+      fname: file.name,
+      mimeType: file.type,
+    }, {
+      useCdnDomain: true,
+      region: qiniu.region.z2,
     })
-    uploadStore.updateFileStatus(uploadEntry.id, {
-      status: 'success',
-      progress: 100,
-      url: result.url,
+    void observable.subscribe({
+      next: (res) => {
+        const percent = Math.round(res.total.percent)
+        uploadStore.updateFileStatus(file.id, { progress: percent })
+      },
+      error: (err) => {
+        uploadStore.updateFileStatus(file.id, { status: 'error', error: `七牛云上传失败: ${err.message || err}` })
+      },
+      complete: async (res) => {
+        const qiniuKey = res.key || key
+        const qiniuUrl = `${domain}/${qiniuKey}`
+
+        uploadStore.updateFileStatus(file.id, {
+          status: 'uploading_backend',
+          progress: 0,
+          url: qiniuUrl,
+        })
+
+        try {
+          await notifyUploadSuccess(qiniuKey, file.name, file.type)
+          uploadStore.updateFileStatus(file.id, {
+            status: 'success',
+            progress: 100,
+            url: qiniuUrl,
+          })
+          ElMessage.success(`"${file.name}" 上传成功`)
+        } catch (backendErr) {
+          uploadStore.updateFileStatus(file.id, {
+            status: 'error',
+            url: qiniuUrl,
+            error: `通知后端失败: ${backendErr instanceof Error ? backendErr.message : '未知错误'}`,
+          })
+        }
+      },
     })
-    ElMessage.success(`"${file.name}" 上传成功`)
-  } catch (error) {
-    const msg = error instanceof Error ? error.message : '上传失败'
-    uploadStore.updateFileStatus(uploadEntry.id, { status: 'error', error: msg })
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : '获取上传凭证失败'
+    uploadStore.updateFileStatus(file.id, { status: 'error', error: msg })
   }
 }
 
-async function retryUpload(_file: UploadFile) {
-  // Create a fake File object for retry; in a real app, re-select or keep a reference
-  ElMessage.info('请重新选择文件进行上传')
+async function retryUpload(file: UploadFile) {
+  const hasQiniuUrl = !!file.url && file.status === 'error' && file.error?.includes('后端')
+
+  if (hasQiniuUrl && file.url) {
+    uploadStore.updateFileStatus(file.id, { status: 'uploading_backend', progress: 0, error: undefined })
+    try {
+      const key = file.url.split('/').pop()
+      await notifyUploadSuccess(key!, file.name, file.type)
+      uploadStore.updateFileStatus(file.id, {
+        status: 'success',
+        progress: 100,
+        error: undefined,
+      })
+      ElMessage.success(`"${file.name}" 通知后端成功`)
+    } catch (err) {
+      uploadStore.updateFileStatus(file.id, {
+        status: 'error',
+        error: `通知后端失败: ${err instanceof Error ? err.message : '未知错误'}`,
+      })
+    }
+  } else {
+    uploadStore.resetFileForRetry(file.id)
+    await doUpload(file)
+  }
 }
 
 function openFile(url: string) {
@@ -322,6 +463,54 @@ async function clearAll() {
   font-size: 14px;
   color: #86909c;
   margin: 0;
+}
+
+/* Config warning */
+.config-warning {
+  display: flex;
+  gap: 12px;
+  padding: 16px 20px;
+  background: #fffbe6;
+  border: 1px solid #ffe58f;
+  border-radius: 10px;
+  margin-bottom: 24px;
+  color: #ad8b00;
+}
+
+.config-warning-content {
+  flex: 1;
+}
+
+.config-warning-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: #1d2129;
+  margin: 0 0 8px;
+}
+
+.config-warning-desc {
+  font-size: 13px;
+  color: #666;
+  margin: 0 0 8px;
+}
+
+.config-warning-list {
+  margin: 0;
+  padding-left: 20px;
+  font-size: 13px;
+  color: #666;
+}
+
+.config-warning-list li {
+  margin: 4px 0;
+}
+
+.config-warning code {
+  background: #f2f3f5;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 12px;
+  color: #4e5969;
 }
 
 /* Upload zone */
@@ -417,6 +606,8 @@ async function clearAll() {
 
 .stat-actions {
   margin-left: auto;
+  display: flex;
+  gap: 8px;
 }
 
 /* File list */
