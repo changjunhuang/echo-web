@@ -4,7 +4,13 @@ import type { RouteRecordRaw } from 'vue-router'
 const routes: RouteRecordRaw[] = [
   {
     path: '/',
-    redirect: '/chat',
+    redirect: '/home',
+  },
+  {
+    path: '/home',
+    name: 'Home',
+    component: () => import('@/views/home/HomePage.vue'),
+    meta: { title: '首页' },
   },
   {
     path: '/chat',
@@ -36,7 +42,7 @@ const routes: RouteRecordRaw[] = [
   },
   {
     path: '/:pathMatch(.*)*',
-    redirect: '/chat',
+    redirect: '/home',
   },
 ]
 

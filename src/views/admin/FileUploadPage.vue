@@ -455,13 +455,13 @@ async function clearAll() {
 .page-title {
   font-size: 22px;
   font-weight: 700;
-  color: #1d2129;
+  color: #fff;
   margin: 0 0 6px;
 }
 
 .page-desc {
   font-size: 14px;
-  color: #86909c;
+  color: rgba(255, 255, 255, 0.5);
   margin: 0;
 }
 
@@ -470,11 +470,11 @@ async function clearAll() {
   display: flex;
   gap: 12px;
   padding: 16px 20px;
-  background: #fffbe6;
-  border: 1px solid #ffe58f;
+  background: rgba(245, 108, 108, 0.1);
+  border: 1px solid rgba(245, 108, 108, 0.3);
   border-radius: 10px;
   margin-bottom: 24px;
-  color: #ad8b00;
+  color: #f56c6c;
 }
 
 .config-warning-content {
@@ -484,13 +484,13 @@ async function clearAll() {
 .config-warning-title {
   font-size: 14px;
   font-weight: 600;
-  color: #1d2129;
+  color: #fff;
   margin: 0 0 8px;
 }
 
 .config-warning-desc {
   font-size: 13px;
-  color: #666;
+  color: rgba(255, 255, 255, 0.7);
   margin: 0 0 8px;
 }
 
@@ -498,7 +498,7 @@ async function clearAll() {
   margin: 0;
   padding-left: 20px;
   font-size: 13px;
-  color: #666;
+  color: rgba(255, 255, 255, 0.7);
 }
 
 .config-warning-list li {
@@ -506,18 +506,18 @@ async function clearAll() {
 }
 
 .config-warning code {
-  background: #f2f3f5;
+  background: rgba(255, 255, 255, 0.1);
   padding: 2px 6px;
   border-radius: 4px;
   font-size: 12px;
-  color: #4e5969;
+  color: #79abff;
 }
 
 /* Upload zone */
 .upload-zone {
-  border: 2px dashed #c9cdd4;
+  border: 2px dashed rgba(255, 255, 255, 0.15);
   border-radius: 12px;
-  background: #fafafa;
+  background: rgba(255, 255, 255, 0.03);
   padding: 48px 24px;
   text-align: center;
   cursor: pointer;
@@ -527,13 +527,13 @@ async function clearAll() {
 }
 
 .upload-zone:hover {
-  border-color: #165dff;
-  background: #f0f5ff;
+  border-color: rgba(22, 93, 255, 0.6);
+  background: rgba(22, 93, 255, 0.08);
 }
 
 .upload-zone--dragging {
-  border-color: #165dff;
-  background: #e8f3ff;
+  border-color: rgba(22, 93, 255, 0.8);
+  background: rgba(22, 93, 255, 0.12);
   transform: scale(1.005);
 }
 
@@ -554,20 +554,20 @@ async function clearAll() {
 }
 
 .upload-icon {
-  color: #86909c;
+  color: rgba(255, 255, 255, 0.4);
   margin-bottom: 8px;
 }
 
 .upload-text {
   font-size: 16px;
   font-weight: 600;
-  color: #1d2129;
+  color: #fff;
   margin: 0;
 }
 
 .upload-hint {
   font-size: 13px;
-  color: #86909c;
+  color: rgba(255, 255, 255, 0.4);
   margin: 0 0 12px;
 }
 
@@ -581,8 +581,8 @@ async function clearAll() {
   align-items: center;
   gap: 32px;
   padding: 16px 20px;
-  background: #fff;
-  border: 1px solid #e4e7ec;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 10px;
   margin-bottom: 16px;
 }
@@ -596,12 +596,12 @@ async function clearAll() {
 .stat-value {
   font-size: 20px;
   font-weight: 700;
-  color: #1d2129;
+  color: #fff;
 }
 
 .stat-label {
   font-size: 12px;
-  color: #86909c;
+  color: rgba(255, 255, 255, 0.5);
 }
 
 .stat-actions {
@@ -612,8 +612,8 @@ async function clearAll() {
 
 /* File list */
 .file-list-section {
-  background: #fff;
-  border: 1px solid #e4e7ec;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 10px;
   overflow: hidden;
 }
@@ -624,11 +624,11 @@ async function clearAll() {
   gap: 12px;
   align-items: center;
   padding: 12px 16px;
-  background: #f7f8fa;
-  border-bottom: 1px solid #e4e7ec;
+  background: rgba(255, 255, 255, 0.02);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
   font-size: 12px;
   font-weight: 600;
-  color: #86909c;
+  color: rgba(255, 255, 255, 0.5);
   text-transform: uppercase;
   letter-spacing: 0.5px;
 }
@@ -644,7 +644,7 @@ async function clearAll() {
   gap: 12px;
   align-items: center;
   padding: 14px 16px;
-  border-bottom: 1px solid #f2f3f5;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
   transition: background-color 0.15s;
 }
 
@@ -653,22 +653,22 @@ async function clearAll() {
 }
 
 .file-item:hover {
-  background: #f9fafc;
+  background: rgba(255, 255, 255, 0.03);
 }
 
 .file-item--error {
-  background: #fff8f6;
+  background: rgba(245, 108, 108, 0.05);
 }
 
 .file-icon {
   width: 36px;
   height: 36px;
   border-radius: 8px;
-  background: #f2f3f5;
+  background: rgba(255, 255, 255, 0.08);
   display: flex;
   align-items: center;
   justify-content: center;
-  color: #4e5969;
+  color: rgba(255, 255, 255, 0.7);
   flex-shrink: 0;
 }
 
@@ -682,7 +682,7 @@ async function clearAll() {
 .file-name {
   font-size: 14px;
   font-weight: 500;
-  color: #1d2129;
+  color: rgba(255, 255, 255, 0.9);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -696,28 +696,28 @@ async function clearAll() {
 
 .progress-text {
   font-size: 12px;
-  color: #165dff;
+  color: #79abff;
   white-space: nowrap;
   flex-shrink: 0;
 }
 
 .file-error {
   font-size: 12px;
-  color: #f53f3f;
+  color: #f56c6c;
 }
 
 .file-size,
 .file-type {
   font-size: 13px;
-  color: #86909c;
+  color: rgba(255, 255, 255, 0.5);
 }
 
 .file-type code {
-  background: #f2f3f5;
+  background: rgba(255, 255, 255, 0.08);
   padding: 2px 6px;
   border-radius: 4px;
   font-size: 11px;
-  color: #4e5969;
+  color: rgba(255, 255, 255, 0.7);
 }
 
 .status-badge {
@@ -731,23 +731,23 @@ async function clearAll() {
 }
 
 .status-badge--pending {
-  background: #f2f3f5;
-  color: #4e5969;
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.7);
 }
 
 .status-badge--uploading {
-  background: #e8f3ff;
-  color: #165dff;
+  background: rgba(22, 93, 255, 0.2);
+  color: #79abff;
 }
 
 .status-badge--success {
-  background: #e8ffea;
-  color: #00b42a;
+  background: rgba(0, 180, 42, 0.15);
+  color: #67c23a;
 }
 
 .status-badge--error {
-  background: #ffece8;
-  color: #f53f3f;
+  background: rgba(245, 108, 108, 0.15);
+  color: #f56c6c;
 }
 
 .file-actions {
@@ -760,7 +760,7 @@ async function clearAll() {
 .empty-state {
   text-align: center;
   padding: 64px 24px;
-  color: #86909c;
+  color: rgba(255, 255, 255, 0.4);
 }
 
 .empty-state p {

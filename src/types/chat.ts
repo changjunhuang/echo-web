@@ -15,8 +15,10 @@ export interface ChatSession {
 
 export interface ChatRequest {
   model: string
+  userId: string
+  sessionId: string
   messages?: Pick<Message, 'role' | 'content'>[]
-  Message?: string
+  message?: string
   stream?: boolean
   temperature?: number
   max_tokens?: number

@@ -3,7 +3,7 @@
     <AdminSidebar />
     <div class="admin-body">
       <header class="admin-header">
-        <h1 class="admin-title">后台管理</h1>
+        <h1 class="admin-title">文件管理</h1>
       </header>
       <main class="admin-main">
         <RouterView />
@@ -20,7 +20,8 @@ import AdminSidebar from '@/components/AdminSidebar.vue'
 .admin-layout {
   display: flex;
   min-height: 100vh;
-  background-color: #f4f6f8;
+  background-color: #0a0a10;
+  overflow: hidden;
 }
 
 .admin-body {
@@ -32,8 +33,8 @@ import AdminSidebar from '@/components/AdminSidebar.vue'
 
 .admin-header {
   height: 60px;
-  background-color: #fff;
-  border-bottom: 1px solid #e4e7ec;
+  background: rgba(255, 255, 255, 0.03);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
   display: flex;
   align-items: center;
   padding: 0 24px;
@@ -43,7 +44,7 @@ import AdminSidebar from '@/components/AdminSidebar.vue'
 .admin-title {
   font-size: 18px;
   font-weight: 600;
-  color: #1d2129;
+  color: #fff;
   margin: 0;
 }
 

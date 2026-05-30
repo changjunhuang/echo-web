@@ -30,6 +30,7 @@
 import { Setting } from '@element-plus/icons-vue'
 
 const navItems = [
+  { path: '/home', label: '首页' },
   { path: '/chat', label: '智能对话' },
 ]
 </script>

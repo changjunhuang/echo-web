@@ -1,6 +1,10 @@
 import request from './index'
 import type { ChatRequest, ChatResponse } from '@/types/chat'
 
+export function getClientIP(): Promise<string> {
+  return request.get('/ip')
+}
+
 export function sendChatMessage(payload: ChatRequest): Promise<ChatResponse> {
   return request.post('/chat/completions', payload)
 }

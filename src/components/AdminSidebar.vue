@@ -24,19 +24,24 @@
 </template>
 
 <script setup lang="ts">
-import { Upload } from '@element-plus/icons-vue'
+import { Upload, ChatDotRound, HomeFilled } from '@element-plus/icons-vue'
 
-const navItems = [{ path: '/admin/upload', label: '文件管理', icon: Upload }]
+const navItems = [
+  { path: '/home', label: '首页', icon: HomeFilled },
+  { path: '/chat', label: '智能对话', icon: ChatDotRound },
+  { path: '/admin/upload', label: '文件管理', icon: Upload },
+]
 </script>
 
 <style scoped>
 .admin-sidebar {
   width: 220px;
-  background-color: #fff;
-  border-right: 1px solid #e4e7ec;
+  background: rgba(255, 255, 255, 0.03);
+  border-right: 1px solid rgba(255, 255, 255, 0.08);
   display: flex;
   flex-direction: column;
   flex-shrink: 0;
+  overflow-y: hidden;
 }
 
 .sidebar-logo {
@@ -44,7 +49,7 @@ const navItems = [{ path: '/admin/upload', label: '文件管理', icon: Upload }
   display: flex;
   align-items: center;
   padding: 0 20px;
-  border-bottom: 1px solid #e4e7ec;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
 }
 
 .sidebar-logo-link {
@@ -61,7 +66,7 @@ const navItems = [{ path: '/admin/upload', label: '文件管理', icon: Upload }
 .logo-text {
   font-size: 16px;
   font-weight: 700;
-  color: #1d2129;
+  color: #fff;
 }
 
 .sidebar-nav {
@@ -79,19 +84,19 @@ const navItems = [{ path: '/admin/upload', label: '文件管理', icon: Upload }
   border-radius: 8px;
   font-size: 14px;
   font-weight: 500;
-  color: #4e5969;
+  color: rgba(255, 255, 255, 0.65);
   text-decoration: none;
   transition: color 0.2s, background-color 0.2s;
 }
 
 .sidebar-nav-item:hover {
-  color: #165dff;
-  background-color: #e8f3ff;
+  color: #fff;
+  background: rgba(255, 255, 255, 0.08);
 }
 
 .sidebar-nav-item--active {
-  color: #165dff;
-  background-color: #e8f3ff;
+  color: #fff;
+  background: rgba(22, 93, 255, 0.2);
 }
 
 .nav-icon {

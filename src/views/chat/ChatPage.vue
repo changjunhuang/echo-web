@@ -31,25 +31,6 @@
           <p>暂无对话记录</p>
         </div>
       </div>
-
-      <div class="sidebar-footer">
-        <div class="model-selector">
-          <span class="model-label">当前模型</span>
-          <el-select
-            v-model="chatStore.selectedModel"
-            class="model-select"
-            size="small"
-            :teleported="false"
-          >
-            <el-option
-              v-for="m in availableModels"
-              :key="m.value"
-              :label="m.label"
-              :value="m.value"
-            />
-          </el-select>
-        </div>
-      </div>
     </aside>
 
     <!-- Main chat area -->
@@ -92,7 +73,33 @@
                 </template>
               </div>
               <div class="message-bubble" :class="`message-bubble--${msg.role}`">
-                <div class="message-content" v-html="renderMarkdown(msg.content)" />
+                <div v-if="editingMessageId === msg.id" class="edit-wrapper">
+                  <el-input
+                    v-model="editingText"
+                    type="textarea"
+                    :rows="2"
+                    placeholder="修改内容"
+                    class="edit-input"
+                    @keydown.enter.exact.prevent="handleSaveEdit(msg.id)"
+                    @keydown.esc="handleCancelEdit"
+                  />
+                  <div class="edit-actions">
+                    <button class="edit-btn edit-btn--cancel" @click="handleCancelEdit">取消</button>
+                    <button class="edit-btn edit-btn--save" @click="handleSaveEdit(msg.id)">发送</button>
+                  </div>
+                </div>
+                <div v-else class="message-content" v-html="renderMarkdown(msg.content)" />
+              </div>
+              <div class="message-actions" v-if="msg.role === 'user' && !editingMessageId">
+                <button class="action-btn" @click="handleCopy(msg.content)" title="复制">
+                  <el-icon><CopyDocument /></el-icon>
+                </button>
+                <button class="action-btn" @click="handleEdit(msg)" title="编辑">
+                  <el-icon><Edit /></el-icon>
+                </button>
+                <button class="action-btn action-btn--retry" @click="handleRetry(msg)" title="重试">
+                  <el-icon><RefreshRight /></el-icon>
+                </button>
               </div>
             </div>
 
@@ -151,7 +158,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, nextTick, watch } from 'vue'
+import { ref, nextTick, watch, onMounted } from 'vue'
 import {
   Plus,
   Close,
@@ -159,15 +166,25 @@ import {
   UserFilled,
   Promotion,
   VideoPause,
+  CopyDocument,
+  RefreshRight,
+  Edit,
 } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { useChatStore } from '@/stores/chat'
+import type { ChatSession } from '@/types/chat'
 import { sendChatMessageStream } from '@/api/chat'
 
 const chatStore = useChatStore()
 const inputText = ref('')
 const messagesArea = ref<HTMLElement | null>(null)
 let abortController: AbortController | null = null
+const editingMessageId = ref<string | null>(null)
+const editingText = ref('')
+
+onMounted(() => {
+  chatStore.initDefaultSession()
+})
 
 const availableModels = [
   { label: 'Echo Max 1', value: 'echo-max-1' },
@@ -218,8 +235,27 @@ async function handleSend() {
   const text = inputText.value.trim()
   if (!text || chatStore.isStreaming) return
 
-  const sessionId = chatStore.currentSessionId
-  if (!sessionId) return
+  // Use current session or fallback to default session based on IP
+  let sessionId = chatStore.currentSessionId
+  if (!sessionId) {
+    sessionId = chatStore.defaultSessionId
+    // If using default session (IP-based), create a temporary session for UI
+    if (sessionId && !chatStore.sessions.find((s) => s.id === sessionId)) {
+      const defaultSession: ChatSession = {
+        id: sessionId,
+        title: '默认对话',
+        messages: [],
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      }
+      chatStore.sessions.unshift(defaultSession)
+      chatStore.currentSessionId = sessionId
+    }
+  }
+  if (!sessionId) {
+    ElMessage.warning('会话初始化中，请稍后重试')
+    return
+  }
 
   inputText.value = ''
   chatStore.addMessage(sessionId, { role: 'user', content: text })
@@ -229,8 +265,11 @@ async function handleSend() {
   const assistantMsg = chatStore.addMessage(sessionId, { role: 'assistant', content: '' })
 
   // Replace last message with streaming content
-  const session = chatStore.currentSession
-  if (!session) return
+  const session = chatStore.sessions.find((s) => s.id === sessionId)
+  if (!session) {
+    chatStore.isStreaming = false
+    return
+  }
 
   const lastMsg = session.messages[session.messages.length - 1]
   lastMsg.content = ''
@@ -247,7 +286,9 @@ async function handleSend() {
   abortController = sendChatMessageStream(
     {
       model: chatStore.selectedModel,
-      Message: messageString,
+      userId: chatStore.userId,
+      sessionId: sessionId,
+      message: messageString,
     },
     async (chunk) => {
       chatStore.appendToLastAssistantMessage(sessionId, chunk)
@@ -268,6 +309,76 @@ async function handleSend() {
 function handleStop() {
   abortController?.abort()
   chatStore.isStreaming = false
+}
+
+async function handleCopy(content: string) {
+  try {
+    await navigator.clipboard.writeText(content)
+    ElMessage.success('复制成功')
+  } catch {
+    ElMessage.error('复制失败')
+  }
+}
+
+async function handleRetry(msg: { id: string; content: string }) {
+  const sessionId = chatStore.currentSessionId
+  if (!sessionId || chatStore.isStreaming) return
+
+  const session = chatStore.sessions.find((s) => s.id === sessionId)
+  if (!session) return
+
+  const msgIndex = session.messages.findIndex((m) => m.id === msg.id)
+  if (msgIndex === -1) return
+
+  // Remove this user message and its following assistant message
+  session.messages.splice(msgIndex, 1)
+  // Remove the next assistant message if exists
+  if (msgIndex < session.messages.length && session.messages[msgIndex].role === 'assistant') {
+    session.messages.splice(msgIndex, 1)
+  }
+
+  // Re-send the user message
+  inputText.value = msg.content
+  await handleSend()
+}
+
+function handleEdit(msg: { id: string; content: string }) {
+  editingMessageId.value = msg.id
+  editingText.value = msg.content
+}
+
+async function handleSaveEdit(msgId: string) {
+  const newContent = editingText.value.trim()
+  if (!newContent) return
+
+  const sessionId = chatStore.currentSessionId
+  if (!sessionId) return
+
+  const session = chatStore.sessions.find((s) => s.id === sessionId)
+  if (!session) return
+
+  const msgIndex = session.messages.findIndex((m) => m.id === msgId)
+  if (msgIndex === -1) return
+
+  // Update the message content
+  session.messages[msgIndex].content = newContent
+  editingMessageId.value = null
+  editingText.value = ''
+
+  // Remove this user message and its following assistant message
+  session.messages.splice(msgIndex, 1)
+  if (msgIndex < session.messages.length && session.messages[msgIndex].role === 'assistant') {
+    session.messages.splice(msgIndex, 1)
+  }
+
+  // Re-send the edited message
+  inputText.value = newContent
+  await handleSend()
+}
+
+function handleCancelEdit() {
+  editingMessageId.value = null
+  editingText.value = ''
 }
 
 watch(
@@ -294,6 +405,7 @@ watch(
   border-right: 1px solid rgba(255, 255, 255, 0.08);
   display: flex;
   flex-direction: column;
+  overflow: hidden;
 }
 
 .sidebar-header {
@@ -547,6 +659,99 @@ watch(
   border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 4px 14px 14px 14px;
   color: rgba(255, 255, 255, 0.85);
+}
+
+.message-actions {
+  display: flex;
+  gap: 4px;
+  margin-top: 8px;
+  opacity: 0;
+  transition: opacity 0.2s;
+}
+
+.message-wrapper:hover .message-actions {
+  opacity: 1;
+}
+
+.action-btn {
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  border: none;
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.5);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s;
+}
+
+.action-btn:hover {
+  background: rgba(255, 255, 255, 0.15);
+  color: #fff;
+}
+
+.action-btn--retry {
+  color: #e6a23c;
+}
+
+.action-btn--retry:hover {
+  background: rgba(245, 108, 108, 0.15);
+  color: #f56c6c;
+}
+
+.edit-wrapper {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 200px;
+}
+
+.edit-input {
+  width: 100%;
+}
+
+:deep(.edit-input .el-textarea__inner) {
+  background: rgba(22, 93, 255, 0.15);
+  border: 1px solid rgba(22, 93, 255, 0.4);
+  color: #fff;
+  border-radius: 8px;
+  padding: 8px 12px;
+}
+
+.edit-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.edit-btn {
+  padding: 4px 12px;
+  border-radius: 6px;
+  border: none;
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.edit-btn--cancel {
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.7);
+}
+
+.edit-btn--cancel:hover {
+  background: rgba(255, 255, 255, 0.15);
+  color: #fff;
+}
+
+.edit-btn--save {
+  background: #165dff;
+  color: #fff;
+}
+
+.edit-btn--save:hover {
+  background: #3a7aff;
 }
 
 .message-content :deep(code) {
