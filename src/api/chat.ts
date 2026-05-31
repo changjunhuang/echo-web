@@ -14,6 +14,7 @@ export function sendChatMessageStream(
   onChunk: (chunk: string) => void,
   onDone: () => void,
   onError: (error: Error) => void,
+  onImageUrl?: (imageUrl: string) => void,
 ): AbortController {
   const controller = new AbortController()
   const baseURL = import.meta.env.VITE_API_BASE_URL || '/api'
@@ -28,6 +29,18 @@ export function sendChatMessageStream(
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({}))
         throw new Error(errorData.message || '请求失败')
+      }
+      const contentType = response.headers.get('content-type') || ''
+      if (contentType.includes('application/json')) {
+        const data = await response.json()
+        if (data.code === 200 && data.data?.reply) {
+          onChunk(data.data.reply)
+        }
+        if (data.data?.imageUrl) {
+          onImageUrl?.(data.data.imageUrl)
+        }
+        onDone()
+        return
       }
       const reader = response.body?.getReader()
       const decoder = new TextDecoder()

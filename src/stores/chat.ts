@@ -93,6 +93,16 @@ export const useChatStore = defineStore('chat', () => {
     }
   }
 
+  function setMessageImageUrl(sessionId: string, imageUrl: string) {
+    const session = sessions.value.find((s) => s.id === sessionId)
+    if (!session) return
+    const last = session.messages[session.messages.length - 1]
+    if (last && last.role === 'assistant') {
+      last.imageUrl = imageUrl
+      session.updatedAt = Date.now()
+    }
+  }
+
   function clearSession(sessionId: string) {
     const session = sessions.value.find((s) => s.id === sessionId)
     if (session) {
@@ -114,6 +124,7 @@ export const useChatStore = defineStore('chat', () => {
     deleteSession,
     addMessage,
     appendToLastAssistantMessage,
+    setMessageImageUrl,
     clearSession,
   }
 })

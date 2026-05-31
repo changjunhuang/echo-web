@@ -25,7 +25,8 @@
       "Bash(taskkill //F //PID 24456)",
       "Bash(taskkill //F //PID 11104)",
       "Bash(taskkill //F //PID 7956)",
-      "Bash(taskkill *)"
+      "Bash(taskkill *)",
+      "Bash(npx vue-tsc *)"
     ]
   }
 }

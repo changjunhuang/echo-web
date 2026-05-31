@@ -14,15 +14,9 @@ const routes: RouteRecordRaw[] = [
   },
   {
     path: '/chat',
-    component: () => import('@/layouts/AdminLayout.vue'),
-    children: [
-      {
-        path: '',
-        name: 'Chat',
-        component: () => import('@/views/chat/ChatPage.vue'),
-        meta: { title: '智能对话' },
-      },
-    ],
+    name: 'Chat',
+    component: () => import('@/views/chat/ChatPage.vue'),
+    meta: { title: '智能对话' },
   },
   {
     path: '/admin',
