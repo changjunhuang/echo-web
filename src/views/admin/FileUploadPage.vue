@@ -445,22 +445,23 @@ async function clearAll() {
 
 <style scoped>
 .upload-page {
-  max-width: 1000px;
+  max-width: 70rem;
+  margin: 0 auto;
 }
 
 .page-header {
-  margin-bottom: 24px;
+  margin-bottom: clamp(1rem, 2vw, 1.5rem);
 }
 
 .page-title {
-  font-size: 22px;
+  font-size: clamp(1.1rem, 1.6vw, 1.4rem);
   font-weight: 700;
   color: #fff;
-  margin: 0 0 6px;
+  margin: 0 0 0.4rem;
 }
 
 .page-desc {
-  font-size: 14px;
+  font-size: clamp(0.75rem, 0.95vw, 0.9rem);
   color: rgba(255, 255, 255, 0.5);
   margin: 0;
 }
@@ -468,12 +469,12 @@ async function clearAll() {
 /* Config warning */
 .config-warning {
   display: flex;
-  gap: 12px;
-  padding: 16px 20px;
+  gap: 0.75rem;
+  padding: clamp(0.75rem, 1.4vw, 1rem) clamp(0.85rem, 1.6vw, 1.25rem);
   background: rgba(245, 108, 108, 0.1);
   border: 1px solid rgba(245, 108, 108, 0.3);
-  border-radius: 10px;
-  margin-bottom: 24px;
+  border-radius: 0.6rem;
+  margin-bottom: clamp(1rem, 2vw, 1.5rem);
   color: #f56c6c;
 }
 
@@ -482,47 +483,47 @@ async function clearAll() {
 }
 
 .config-warning-title {
-  font-size: 14px;
+  font-size: clamp(0.8rem, 1vw, 0.9rem);
   font-weight: 600;
   color: #fff;
-  margin: 0 0 8px;
+  margin: 0 0 0.5rem;
 }
 
 .config-warning-desc {
-  font-size: 13px;
+  font-size: clamp(0.7rem, 0.9vw, 0.85rem);
   color: rgba(255, 255, 255, 0.7);
-  margin: 0 0 8px;
+  margin: 0 0 0.5rem;
 }
 
 .config-warning-list {
   margin: 0;
-  padding-left: 20px;
-  font-size: 13px;
+  padding-left: 1.25rem;
+  font-size: clamp(0.7rem, 0.9vw, 0.85rem);
   color: rgba(255, 255, 255, 0.7);
 }
 
 .config-warning-list li {
-  margin: 4px 0;
+  margin: 0.25rem 0;
 }
 
 .config-warning code {
   background: rgba(255, 255, 255, 0.1);
-  padding: 2px 6px;
-  border-radius: 4px;
-  font-size: 12px;
+  padding: 0.1rem 0.4rem;
+  border-radius: 0.25rem;
+  font-size: clamp(0.65rem, 0.8vw, 0.78rem);
   color: #79abff;
 }
 
 /* Upload zone */
 .upload-zone {
   border: 2px dashed rgba(255, 255, 255, 0.15);
-  border-radius: 12px;
+  border-radius: 0.75rem;
   background: rgba(255, 255, 255, 0.03);
-  padding: 48px 24px;
+  padding: clamp(1.75rem, 4vw, 3rem) clamp(0.85rem, 1.8vw, 1.5rem);
   text-align: center;
   cursor: pointer;
   transition: all 0.25s;
-  margin-bottom: 24px;
+  margin-bottom: clamp(1rem, 2vw, 1.5rem);
   position: relative;
 }
 
@@ -550,25 +551,25 @@ async function clearAll() {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 8px;
+  gap: 0.5rem;
 }
 
 .upload-icon {
   color: rgba(255, 255, 255, 0.4);
-  margin-bottom: 8px;
+  margin-bottom: 0.5rem;
 }
 
 .upload-text {
-  font-size: 16px;
+  font-size: clamp(0.85rem, 1.1vw, 1rem);
   font-weight: 600;
   color: #fff;
   margin: 0;
 }
 
 .upload-hint {
-  font-size: 13px;
+  font-size: clamp(0.7rem, 0.9vw, 0.85rem);
   color: rgba(255, 255, 255, 0.4);
-  margin: 0 0 12px;
+  margin: 0 0 0.75rem;
 }
 
 .upload-btn {
@@ -579,58 +580,59 @@ async function clearAll() {
 .stats-bar {
   display: flex;
   align-items: center;
-  gap: 32px;
-  padding: 16px 20px;
+  gap: clamp(1rem, 2.4vw, 2rem);
+  padding: clamp(0.75rem, 1.4vw, 1rem) clamp(0.85rem, 1.6vw, 1.25rem);
   background: rgba(255, 255, 255, 0.03);
   border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 10px;
-  margin-bottom: 16px;
+  border-radius: 0.6rem;
+  margin-bottom: 1rem;
+  flex-wrap: wrap;
 }
 
 .stat {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 0.1rem;
 }
 
 .stat-value {
-  font-size: 20px;
+  font-size: clamp(1rem, 1.4vw, 1.25rem);
   font-weight: 700;
   color: #fff;
 }
 
 .stat-label {
-  font-size: 12px;
+  font-size: clamp(0.65rem, 0.85vw, 0.78rem);
   color: rgba(255, 255, 255, 0.5);
 }
 
 .stat-actions {
   margin-left: auto;
   display: flex;
-  gap: 8px;
+  gap: 0.5rem;
 }
 
 /* File list */
 .file-list-section {
   background: rgba(255, 255, 255, 0.03);
   border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 10px;
+  border-radius: 0.6rem;
   overflow: hidden;
 }
 
 .file-list-header {
   display: grid;
-  grid-template-columns: 40px 1fr 100px 80px 120px 200px;
-  gap: 12px;
+  grid-template-columns: 2.5rem 1fr 6rem 5rem 7.5rem 12rem;
+  gap: 0.75rem;
   align-items: center;
-  padding: 12px 16px;
+  padding: clamp(0.5rem, 1vw, 0.75rem) clamp(0.75rem, 1.4vw, 1rem);
   background: rgba(255, 255, 255, 0.02);
   border-bottom: 1px solid rgba(255, 255, 255, 0.06);
-  font-size: 12px;
+  font-size: clamp(0.65rem, 0.85vw, 0.78rem);
   font-weight: 600;
   color: rgba(255, 255, 255, 0.5);
   text-transform: uppercase;
-  letter-spacing: 0.5px;
+  letter-spacing: 0.05em;
 }
 
 .file-list {
@@ -640,10 +642,10 @@ async function clearAll() {
 
 .file-item {
   display: grid;
-  grid-template-columns: 40px 1fr 100px 80px 120px 200px;
-  gap: 12px;
+  grid-template-columns: 2.5rem 1fr 6rem 5rem 7.5rem 12rem;
+  gap: 0.75rem;
   align-items: center;
-  padding: 14px 16px;
+  padding: clamp(0.6rem, 1.2vw, 0.9rem) clamp(0.75rem, 1.4vw, 1rem);
   border-bottom: 1px solid rgba(255, 255, 255, 0.04);
   transition: background-color 0.15s;
 }
@@ -661,9 +663,9 @@ async function clearAll() {
 }
 
 .file-icon {
-  width: 36px;
-  height: 36px;
-  border-radius: 8px;
+  width: clamp(1.8rem, 2.4vw, 2.25rem);
+  height: clamp(1.8rem, 2.4vw, 2.25rem);
+  border-radius: 0.5rem;
   background: rgba(255, 255, 255, 0.08);
   display: flex;
   align-items: center;
@@ -675,12 +677,12 @@ async function clearAll() {
 .file-info {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 0.25rem;
   min-width: 0;
 }
 
 .file-name {
-  font-size: 14px;
+  font-size: clamp(0.8rem, 1vw, 0.9rem);
   font-weight: 500;
   color: rgba(255, 255, 255, 0.9);
   overflow: hidden;
@@ -691,42 +693,42 @@ async function clearAll() {
 .file-progress {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 0.5rem;
 }
 
 .progress-text {
-  font-size: 12px;
+  font-size: clamp(0.65rem, 0.85vw, 0.78rem);
   color: #79abff;
   white-space: nowrap;
   flex-shrink: 0;
 }
 
 .file-error {
-  font-size: 12px;
+  font-size: clamp(0.65rem, 0.85vw, 0.78rem);
   color: #f56c6c;
 }
 
 .file-size,
 .file-type {
-  font-size: 13px;
+  font-size: clamp(0.7rem, 0.9vw, 0.85rem);
   color: rgba(255, 255, 255, 0.5);
 }
 
 .file-type code {
   background: rgba(255, 255, 255, 0.08);
-  padding: 2px 6px;
-  border-radius: 4px;
-  font-size: 11px;
+  padding: 0.1rem 0.4rem;
+  border-radius: 0.25rem;
+  font-size: clamp(0.6rem, 0.8vw, 0.7rem);
   color: rgba(255, 255, 255, 0.7);
 }
 
 .status-badge {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  padding: 4px 10px;
+  gap: 0.25rem;
+  padding: 0.25rem 0.6rem;
   border-radius: 100px;
-  font-size: 12px;
+  font-size: clamp(0.65rem, 0.85vw, 0.78rem);
   font-weight: 500;
 }
 
@@ -752,19 +754,19 @@ async function clearAll() {
 
 .file-actions {
   display: flex;
-  gap: 6px;
+  gap: 0.4rem;
   flex-wrap: wrap;
 }
 
 /* Empty state */
 .empty-state {
   text-align: center;
-  padding: 64px 24px;
+  padding: clamp(2.5rem, 5vw, 4rem) clamp(1rem, 2vw, 1.5rem);
   color: rgba(255, 255, 255, 0.4);
 }
 
 .empty-state p {
-  margin: 16px 0 0;
-  font-size: 14px;
+  margin: 1rem 0 0;
+  font-size: clamp(0.8rem, 1vw, 0.9rem);
 }
 </style>

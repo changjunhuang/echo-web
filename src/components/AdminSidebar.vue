@@ -2,7 +2,6 @@
   <aside class="admin-sidebar">
     <div class="sidebar-logo">
       <RouterLink to="/" class="sidebar-logo-link">
-        <span class="logo-icon">⚡</span>
         <span class="logo-text">Echo Web</span>
       </RouterLink>
     </div>
@@ -35,7 +34,7 @@ const navItems = [
 
 <style scoped>
 .admin-sidebar {
-  width: 220px;
+  width: clamp(11rem, 14vw, 15rem);
   background: rgba(255, 255, 255, 0.03);
   border-right: 1px solid rgba(255, 255, 255, 0.08);
   display: flex;
@@ -45,44 +44,40 @@ const navItems = [
 }
 
 .sidebar-logo {
-  height: 60px;
+  height: clamp(3.25rem, 6vh, 4.5rem);
   display: flex;
   align-items: center;
-  padding: 0 20px;
+  padding: 0 clamp(0.85rem, 1.5vw, 1.25rem);
   border-bottom: 1px solid rgba(255, 255, 255, 0.08);
 }
 
 .sidebar-logo-link {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 0.5rem;
   text-decoration: none;
 }
 
-.logo-icon {
-  font-size: 20px;
-}
-
 .logo-text {
-  font-size: 16px;
+  font-size: clamp(0.9rem, 1.1vw, 1.05rem);
   font-weight: 700;
   color: #fff;
 }
 
 .sidebar-nav {
-  padding: 16px 12px;
+  padding: clamp(0.75rem, 1.2vw, 1rem) 0.75rem;
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 0.25rem;
 }
 
 .sidebar-nav-item {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 10px 12px;
-  border-radius: 8px;
-  font-size: 14px;
+  gap: 0.6rem;
+  padding: 0.6rem 0.75rem;
+  border-radius: 0.5rem;
+  font-size: clamp(0.8rem, 1vw, 0.95rem);
   font-weight: 500;
   color: rgba(255, 255, 255, 0.65);
   text-decoration: none;
@@ -100,6 +95,6 @@ const navItems = [
 }
 
 .nav-icon {
-  font-size: 16px;
+  font-size: clamp(0.9rem, 1.1vw, 1.05rem);
 }
 </style>

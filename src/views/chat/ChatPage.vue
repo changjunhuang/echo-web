@@ -41,14 +41,6 @@
 
     <!-- Main chat area -->
     <div class="chat-main">
-      <!-- Back button -->
-      <div class="chat-header" v-if="chatStore.currentSession">
-        <button class="back-btn" @click="goHome">
-          <el-icon><ArrowLeft /></el-icon>
-          <span>返回</span>
-        </button>
-      </div>
-
       <!-- Empty state -->
       <div v-if="!chatStore.currentSession" class="chat-empty">
         <div class="empty-content">
@@ -207,7 +199,6 @@
 
 <script setup lang="ts">
 import { ref, nextTick, watch, onMounted } from 'vue'
-import { useRouter } from 'vue-router'
 import {
   Plus,
   Close,
@@ -220,14 +211,12 @@ import {
   Edit,
   DArrowLeft,
   DArrowRight,
-  ArrowLeft,
 } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { useChatStore } from '@/stores/chat'
 import type { ChatSession } from '@/types/chat'
 import { sendChatMessageStream } from '@/api/chat'
 
-const router = useRouter()
 const chatStore = useChatStore()
 const inputText = ref('')
 const emptyInputText = ref('')
@@ -250,11 +239,6 @@ const quickStarts = [
 
 function toggleSidebar() {
   sidebarCollapsed.value = !sidebarCollapsed.value
-}
-
-function goHome() {
-  chatStore.currentSessionId = null
-  router.push('/home')
 }
 
 function handleNewChat() {
@@ -447,14 +431,15 @@ watch(
 <style scoped>
 .echo-layout {
   display: flex;
-  height: 100vh;
+  height: 100%;
   background-color: #1a1a1a;
   color: #fff;
+  position: relative;
 }
 
 /* Sidebar */
 .echo-sidebar {
-  width: 260px;
+  width: clamp(15rem, 18vw, 18rem);
   flex-shrink: 0;
   background: #252525;
   border-right: 1px solid rgba(255, 255, 255, 0.06);
@@ -470,7 +455,7 @@ watch(
 }
 
 .sidebar-header {
-  padding: 16px;
+  padding: clamp(0.75rem, 1.2vw, 1rem);
 }
 
 .new-chat-btn {
@@ -478,13 +463,13 @@ watch(
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 8px;
-  padding: 10px 16px;
-  border-radius: 8px;
+  gap: 0.5rem;
+  padding: 0.6rem 1rem;
+  border-radius: 0.5rem;
   border: none;
   background: #165dff;
   color: #fff;
-  font-size: 14px;
+  font-size: clamp(0.8rem, 1vw, 0.95rem);
   font-weight: 500;
   cursor: pointer;
   transition: background-color 0.2s;
@@ -497,15 +482,15 @@ watch(
 .sessions-list {
   flex: 1;
   overflow-y: auto;
-  padding: 8px;
+  padding: 0.5rem;
 }
 
 .session-item {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 12px 14px;
-  border-radius: 8px;
+  gap: 0.6rem;
+  padding: 0.7rem 0.85rem;
+  border-radius: 0.5rem;
   cursor: pointer;
   transition: background-color 0.15s;
   position: relative;
@@ -520,14 +505,14 @@ watch(
 }
 
 .session-icon {
-  font-size: 14px;
+  font-size: clamp(0.8rem, 1vw, 0.95rem);
   color: rgba(255, 255, 255, 0.5);
   flex-shrink: 0;
 }
 
 .session-title {
   flex: 1;
-  font-size: 14px;
+  font-size: clamp(0.8rem, 1vw, 0.95rem);
   color: rgba(255, 255, 255, 0.75);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -539,9 +524,9 @@ watch(
 }
 
 .session-delete {
-  width: 24px;
-  height: 24px;
-  border-radius: 6px;
+  width: clamp(1.2rem, 1.5vw, 1.5rem);
+  height: clamp(1.2rem, 1.5vw, 1.5rem);
+  border-radius: 0.4rem;
   border: none;
   background: transparent;
   color: rgba(255, 255, 255, 0.3);
@@ -549,7 +534,7 @@ watch(
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 12px;
+  font-size: 0.75rem;
   opacity: 0;
   transition: all 0.2s;
   flex-shrink: 0;
@@ -565,23 +550,23 @@ watch(
 }
 
 .sessions-empty {
-  padding: 32px 16px;
+  padding: clamp(1.25rem, 2vw, 2rem) 1rem;
   text-align: center;
   color: rgba(255, 255, 255, 0.3);
-  font-size: 14px;
+  font-size: clamp(0.8rem, 1vw, 0.95rem);
 }
 
 /* Sidebar toggle */
 .sidebar-toggle {
-  position: fixed;
-  left: 260px;
+  position: absolute;
+  left: clamp(15rem, 18vw, 18rem);
   top: 50%;
   transform: translateY(-50%);
-  width: 24px;
-  height: 48px;
+  width: clamp(1.2rem, 1.6vw, 1.5rem);
+  height: clamp(2.5rem, 3.2vw, 3rem);
   background: #333;
   border: none;
-  border-radius: 0 6px 6px 0;
+  border-radius: 0 0.4rem 0.4rem 0;
   color: rgba(255, 255, 255, 0.6);
   cursor: pointer;
   display: flex;
@@ -608,69 +593,44 @@ watch(
   background: #1a1a1a;
 }
 
-/* Chat header */
-.chat-header {
-  padding: 16px 24px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
-}
-
-.back-btn {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 8px 12px;
-  border-radius: 8px;
-  border: none;
-  background: rgba(255, 255, 255, 0.05);
-  color: rgba(255, 255, 255, 0.7);
-  font-size: 14px;
-  cursor: pointer;
-  transition: all 0.2s;
-}
-
-.back-btn:hover {
-  background: rgba(255, 255, 255, 0.1);
-  color: #fff;
-}
-
 /* Empty state */
 .chat-empty {
   flex: 1;
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 24px;
+  padding: clamp(1rem, 2vw, 1.5rem);
 }
 
 .empty-content {
   text-align: center;
-  max-width: 500px;
+  max-width: 35rem;
 }
 
 .empty-title {
-  font-size: 42px;
+  font-size: clamp(1.75rem, 3.5vw, 2.6rem);
   font-weight: 700;
   color: #fff;
-  margin: 0 0 8px;
-  letter-spacing: 8px;
+  margin: 0 0 0.5rem;
+  letter-spacing: 0.5em;
 }
 
 .empty-subtitle {
-  font-size: 16px;
+  font-size: clamp(0.85rem, 1.1vw, 1rem);
   color: rgba(255, 255, 255, 0.5);
-  margin: 0 0 24px;
+  margin: 0 0 1.5rem;
 }
 
 .empty-input-wrapper {
   display: flex;
   align-items: flex-end;
-  gap: 12px;
+  gap: 0.75rem;
   background: #333;
   border: 1px solid rgba(255, 255, 255, 0.1);
-  border-radius: 24px;
-  padding: 36px 40px 36px 56px;
-  margin-bottom: 16px;
-  max-width: 667px;
+  border-radius: clamp(1rem, 1.8vw, 1.5rem);
+  padding: clamp(0.5rem, 1vw, 0.75rem) clamp(0.75rem, 1.4vw, 1rem) clamp(0.5rem, 1vw, 0.75rem) clamp(1rem, 1.8vw, 1.4rem);
+  margin-bottom: 1rem;
+  max-width: 45rem;
   margin-left: auto;
   margin-right: auto;
 }
@@ -688,7 +648,7 @@ watch(
   border: none;
   padding: 0;
   color: rgba(255, 255, 255, 0.95);
-  font-size: 15px;
+  font-size: clamp(0.85rem, 1.1vw, 1rem);
   line-height: 1.6;
   box-shadow: none;
   resize: none;
@@ -699,9 +659,9 @@ watch(
 }
 
 .empty-send-btn {
-  width: 36px;
-  height: 36px;
-  border-radius: 10px;
+  width: clamp(2rem, 2.5vw, 2.4rem);
+  height: clamp(2rem, 2.5vw, 2.4rem);
+  border-radius: 0.6rem;
   border: none;
   background: #165dff;
   color: #fff;
@@ -709,7 +669,7 @@ watch(
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 16px;
+  font-size: clamp(0.9rem, 1.1vw, 1.05rem);
   transition: background-color 0.2s;
   flex-shrink: 0;
 }
@@ -726,18 +686,18 @@ watch(
 .quick-starts {
   display: flex;
   flex-wrap: wrap;
-  gap: 10px;
+  gap: 0.6rem;
   justify-content: center;
   align-items: center;
 }
 
 .quick-start-btn {
-  padding: 8px 14px;
-  border-radius: 16px;
+  padding: 0.5rem 0.85rem;
+  border-radius: 1rem;
   border: none;
   background: rgba(255, 255, 255, 0.06);
   color: rgba(255, 255, 255, 0.5);
-  font-size: 12px;
+  font-size: clamp(0.7rem, 0.85vw, 0.8rem);
   cursor: pointer;
   transition: all 0.2s;
 }
@@ -751,21 +711,21 @@ watch(
 .messages-area {
   flex: 1;
   overflow-y: auto;
-  padding: 24px 0;
+  padding: clamp(0.85rem, 1.8vw, 1.5rem) 0;
 }
 
 .messages-inner {
-  max-width: 800px;
+  max-width: 55rem;
   margin: 0 auto;
   display: flex;
   flex-direction: column;
-  gap: 24px;
+  gap: clamp(0.85rem, 1.8vw, 1.5rem);
 }
 
 .message-wrapper {
   display: flex;
-  gap: 16px;
-  padding: 0 24px;
+  gap: clamp(0.6rem, 1.2vw, 1rem);
+  padding: 0 clamp(0.85rem, 1.8vw, 1.5rem);
 }
 
 .message-wrapper--user {
@@ -773,13 +733,13 @@ watch(
 }
 
 .message-avatar {
-  width: 36px;
-  height: 36px;
+  width: clamp(1.8rem, 2.5vw, 2.3rem);
+  height: clamp(1.8rem, 2.5vw, 2.3rem);
   border-radius: 50%;
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 16px;
+  font-size: clamp(0.85rem, 1.05vw, 1rem);
   flex-shrink: 0;
   background: #333;
   color: rgba(255, 255, 255, 0.7);
@@ -787,28 +747,28 @@ watch(
 
 .message-bubble {
   max-width: 70%;
-  padding: 14px 18px;
-  border-radius: 16px;
-  font-size: 15px;
+  padding: clamp(0.6rem, 1.1vw, 0.9rem) clamp(0.85rem, 1.3vw, 1.15rem);
+  border-radius: clamp(0.6rem, 1.2vw, 1rem);
+  font-size: clamp(0.8rem, 1.05vw, 0.95rem);
   line-height: 1.7;
 }
 
 .message-bubble--user {
   background: #165dff;
   color: #fff;
-  border-bottom-right-radius: 4px;
+  border-bottom-right-radius: 0.25rem;
 }
 
 .message-bubble--assistant {
   background: #2a2a2a;
   color: rgba(255, 255, 255, 0.9);
-  border-bottom-left-radius: 4px;
+  border-bottom-left-radius: 0.25rem;
 }
 
 .message-actions {
   display: flex;
-  gap: 4px;
-  margin-top: 8px;
+  gap: 0.25rem;
+  margin-top: 0.5rem;
   opacity: 0;
   transition: opacity 0.2s;
 }
@@ -818,9 +778,9 @@ watch(
 }
 
 .action-btn {
-  width: 28px;
-  height: 28px;
-  border-radius: 6px;
+  width: clamp(1.5rem, 1.9vw, 1.85rem);
+  height: clamp(1.5rem, 1.9vw, 1.85rem);
+  border-radius: 0.4rem;
   border: none;
   background: rgba(255, 255, 255, 0.1);
   color: rgba(255, 255, 255, 0.6);
@@ -848,8 +808,8 @@ watch(
 .edit-wrapper {
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  min-width: 200px;
+  gap: 0.5rem;
+  min-width: 12rem;
 }
 
 .edit-input {
@@ -860,21 +820,21 @@ watch(
   background: rgba(22, 93, 255, 0.2);
   border: 1px solid rgba(22, 93, 255, 0.4);
   color: #fff;
-  border-radius: 8px;
-  padding: 8px 12px;
+  border-radius: 0.5rem;
+  padding: 0.5rem 0.75rem;
 }
 
 .edit-actions {
   display: flex;
-  gap: 8px;
+  gap: 0.5rem;
   justify-content: flex-end;
 }
 
 .edit-btn {
-  padding: 4px 12px;
-  border-radius: 6px;
+  padding: 0.25rem 0.75rem;
+  border-radius: 0.4rem;
   border: none;
-  font-size: 12px;
+  font-size: clamp(0.7rem, 0.85vw, 0.8rem);
   cursor: pointer;
   transition: all 0.2s;
 }
@@ -900,19 +860,19 @@ watch(
 
 .message-content :deep(code) {
   background: rgba(255, 255, 255, 0.1);
-  padding: 2px 6px;
-  border-radius: 4px;
-  font-size: 13px;
+  padding: 0.1rem 0.4rem;
+  border-radius: 0.25rem;
+  font-size: clamp(0.75rem, 0.95vw, 0.85rem);
   font-family: monospace;
 }
 
 .message-content :deep(pre) {
   background: rgba(0, 0, 0, 0.4);
   border: 1px solid rgba(255, 255, 255, 0.1);
-  border-radius: 8px;
-  padding: 12px 16px;
+  border-radius: 0.5rem;
+  padding: 0.75rem 1rem;
   overflow-x: auto;
-  margin: 8px 0;
+  margin: 0.5rem 0;
 }
 
 .message-content :deep(pre code) {
@@ -923,12 +883,12 @@ watch(
 /* Streaming dots */
 .streaming-dot {
   display: inline-block;
-  width: 6px;
-  height: 6px;
+  width: 0.4rem;
+  height: 0.4rem;
   border-radius: 50%;
   background: rgba(255, 255, 255, 0.5);
   animation: pulse 1.4s ease-in-out infinite;
-  margin: 0 3px;
+  margin: 0 0.2rem;
 }
 
 .streaming-dot:nth-child(2) {
@@ -952,19 +912,19 @@ watch(
 
 /* Input */
 .input-area {
-  padding: 16px 24px 24px;
+  padding: clamp(0.6rem, 1.2vw, 1rem) clamp(0.85rem, 1.8vw, 1.5rem) clamp(0.85rem, 1.8vw, 1.5rem);
 }
 
 .input-wrapper {
-  max-width: 800px;
+  max-width: 55rem;
   margin: 0 auto;
   display: flex;
   align-items: flex-end;
-  gap: 12px;
+  gap: 0.75rem;
   background: #333;
   border: 1px solid rgba(255, 255, 255, 0.1);
-  border-radius: 16px;
-  padding: 10px 12px 10px 18px;
+  border-radius: clamp(0.6rem, 1.2vw, 1rem);
+  padding: 0.6rem 0.75rem 0.6rem 1.1rem;
   transition: border-color 0.2s;
 }
 
@@ -979,9 +939,9 @@ watch(
 :deep(.chat-input .el-textarea__inner) {
   background: transparent;
   border: none;
-  padding: 6px 0;
+  padding: 0.4rem 0;
   color: rgba(255, 255, 255, 0.95);
-  font-size: 15px;
+  font-size: clamp(0.85rem, 1.1vw, 1rem);
   line-height: 1.6;
   box-shadow: none;
   resize: none;
@@ -999,15 +959,15 @@ watch(
 
 .send-btn,
 .stop-btn {
-  width: 36px;
-  height: 36px;
-  border-radius: 10px;
+  width: clamp(2rem, 2.5vw, 2.4rem);
+  height: clamp(2rem, 2.5vw, 2.4rem);
+  border-radius: 0.6rem;
   border: none;
   cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 16px;
+  font-size: clamp(0.9rem, 1.1vw, 1.05rem);
   transition: all 0.2s;
 }
 
@@ -1035,14 +995,14 @@ watch(
 }
 
 .message-image {
-  margin-top: 12px;
-  border-radius: 12px;
+  margin-top: 0.75rem;
+  border-radius: 0.75rem;
   overflow: hidden;
-  max-width: 400px;
+  max-width: 28rem;
 }
 
 .chat-image {
   width: 100%;
-  border-radius: 12px;
+  border-radius: 0.75rem;
 }
 </style>

@@ -277,11 +277,13 @@ function selectModel(model: ModelSpec) {
   background-color: #0a0a10;
   min-height: 100vh;
   color: #fff;
+  display: flex;
+  flex-direction: column;
 }
 
 /* Hero */
 .hero {
-  padding: 72px 24px 56px;
+  padding: clamp(2.5rem, 6vh, 4.5rem) clamp(1rem, 2vw, 1.75rem) clamp(2rem, 4vh, 3.5rem);
   background: linear-gradient(
     180deg,
     rgba(22, 93, 255, 0.12) 0%,
@@ -291,23 +293,23 @@ function selectModel(model: ModelSpec) {
 }
 
 .hero-inner {
-  max-width: 640px;
+  max-width: 45rem;
   margin: 0 auto;
 }
 
 .hero-title {
-  font-size: 48px;
+  font-size: clamp(2rem, 3.6vw, 3rem);
   font-weight: 800;
-  letter-spacing: -1.5px;
+  letter-spacing: -0.05em;
   background: linear-gradient(135deg, #fff 0%, rgba(255, 255, 255, 0.7) 100%);
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
   background-clip: text;
-  margin: 0 0 16px;
+  margin: 0 0 clamp(0.5rem, 1.2vw, 1rem);
 }
 
 .hero-subtitle {
-  font-size: 18px;
+  font-size: clamp(0.85rem, 1.15vw, 1.1rem);
   color: rgba(255, 255, 255, 0.5);
   line-height: 1.6;
   margin: 0;
@@ -315,28 +317,30 @@ function selectModel(model: ModelSpec) {
 
 /* Category tabs */
 .content-wrapper {
-  max-width: 1280px;
+  max-width: 80rem;
+  width: 100%;
   margin: 0 auto;
-  padding: 0 24px 80px;
+  padding: 0 clamp(1rem, 2vw, 1.75rem) clamp(2.5rem, 5vh, 5rem);
+  flex: 1;
 }
 
 .category-tabs {
   display: flex;
-  gap: 8px;
-  margin-bottom: 32px;
+  gap: 0.5rem;
+  margin-bottom: clamp(1.25rem, 2.4vw, 2rem);
   flex-wrap: wrap;
 }
 
 .category-tab {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 8px 16px;
+  gap: 0.4rem;
+  padding: 0.5rem 1rem;
   border-radius: 100px;
   border: 1px solid rgba(255, 255, 255, 0.1);
   background: transparent;
   color: rgba(255, 255, 255, 0.55);
-  font-size: 14px;
+  font-size: clamp(0.8rem, 1vw, 0.95rem);
   font-weight: 500;
   cursor: pointer;
   transition: all 0.2s;
@@ -355,9 +359,9 @@ function selectModel(model: ModelSpec) {
 
 .tab-count {
   background: rgba(255, 255, 255, 0.12);
-  border-radius: 20px;
-  padding: 1px 7px;
-  font-size: 12px;
+  border-radius: 1.25rem;
+  padding: 0.05rem 0.4rem;
+  font-size: clamp(0.7rem, 0.85vw, 0.8rem);
 }
 
 .category-tab--active .tab-count {
@@ -368,7 +372,7 @@ function selectModel(model: ModelSpec) {
 .table-section {
   background: rgba(255, 255, 255, 0.03);
   border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 16px;
+  border-radius: clamp(0.6rem, 1.2vw, 1rem);
   overflow: hidden;
 }
 
@@ -376,12 +380,12 @@ function selectModel(model: ModelSpec) {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 20px 24px 16px;
+  padding: clamp(0.75rem, 1.6vw, 1.25rem) clamp(0.85rem, 1.8vw, 1.5rem) clamp(0.6rem, 1.2vw, 1rem);
   border-bottom: 1px solid rgba(255, 255, 255, 0.06);
 }
 
 .section-title {
-  font-size: 18px;
+  font-size: clamp(1rem, 1.3vw, 1.15rem);
   font-weight: 600;
   color: #fff;
   margin: 0;
@@ -389,25 +393,25 @@ function selectModel(model: ModelSpec) {
 
 .table-legend {
   display: flex;
-  gap: 16px;
-  font-size: 13px;
+  gap: 1rem;
+  font-size: clamp(0.7rem, 0.9vw, 0.85rem);
   color: rgba(255, 255, 255, 0.4);
 }
 
 .legend-item {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 0.4rem;
 }
 
 .badge {
   display: inline-flex;
   align-items: center;
-  padding: 2px 7px;
-  border-radius: 4px;
-  font-size: 11px;
+  padding: 0.1rem 0.4rem;
+  border-radius: 0.25rem;
+  font-size: clamp(0.6rem, 0.8vw, 0.7rem);
   font-weight: 700;
-  letter-spacing: 0.3px;
+  letter-spacing: 0.05em;
 }
 
 .badge--new {
@@ -429,23 +433,23 @@ function selectModel(model: ModelSpec) {
 .model-table {
   width: 100%;
   border-collapse: collapse;
-  min-width: 900px;
+  min-width: 56rem;
 }
 
 .model-table th {
-  padding: 14px 24px;
+  padding: clamp(0.6rem, 1.2vw, 0.9rem) clamp(0.85rem, 1.8vw, 1.5rem);
   text-align: left;
-  font-size: 12px;
+  font-size: clamp(0.65rem, 0.85vw, 0.8rem);
   font-weight: 600;
   color: rgba(255, 255, 255, 0.35);
   text-transform: uppercase;
-  letter-spacing: 0.8px;
+  letter-spacing: 0.06em;
   background: rgba(255, 255, 255, 0.02);
   white-space: nowrap;
 }
 
 .model-table td {
-  padding: 20px 24px;
+  padding: clamp(0.75rem, 1.6vw, 1.25rem) clamp(0.85rem, 1.8vw, 1.5rem);
   border-top: 1px solid rgba(255, 255, 255, 0.05);
   vertical-align: top;
 }
@@ -464,66 +468,66 @@ function selectModel(model: ModelSpec) {
 }
 
 .col-model {
-  min-width: 280px;
+  min-width: 18rem;
 }
 
 .col-context,
 .col-output {
-  min-width: 120px;
+  min-width: 7.5rem;
 }
 
 .col-price {
-  min-width: 140px;
+  min-width: 9rem;
 }
 
 .col-features {
-  min-width: 200px;
+  min-width: 12rem;
 }
 
 .col-action {
-  min-width: 120px;
+  min-width: 7.5rem;
   text-align: right;
 }
 
 .model-info {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 0.25rem;
 }
 
 .model-name-row {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 0.5rem;
   flex-wrap: wrap;
 }
 
 .model-name {
-  font-size: 15px;
+  font-size: clamp(0.85rem, 1.05vw, 0.95rem);
   font-weight: 600;
   color: #fff;
 }
 
 .model-api-name {
-  font-size: 12px;
+  font-size: clamp(0.7rem, 0.85vw, 0.8rem);
   color: rgba(255, 255, 255, 0.35);
   font-family: 'JetBrains Mono', 'Fira Code', monospace;
   background: rgba(255, 255, 255, 0.06);
-  padding: 2px 7px;
-  border-radius: 4px;
-  margin-top: 2px;
+  padding: 0.1rem 0.4rem;
+  border-radius: 0.25rem;
+  margin-top: 0.1rem;
 }
 
 .model-description {
-  font-size: 13px;
+  font-size: clamp(0.7rem, 0.9vw, 0.85rem);
   color: rgba(255, 255, 255, 0.45);
   line-height: 1.5;
-  margin: 4px 0 0;
-  max-width: 320px;
+  margin: 0.25rem 0 0;
+  max-width: 20rem;
 }
 
 .metric-value {
-  font-size: 14px;
+  font-size: clamp(0.8rem, 1vw, 0.9rem);
   font-weight: 600;
   color: rgba(255, 255, 255, 0.85);
   font-variant-numeric: tabular-nums;
@@ -532,32 +536,32 @@ function selectModel(model: ModelSpec) {
 .price-cell {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 0.1rem;
 }
 
 .price-value {
-  font-size: 15px;
+  font-size: clamp(0.85rem, 1.05vw, 0.95rem);
   font-weight: 700;
   color: #fff;
 }
 
 .price-unit {
-  font-size: 11px;
+  font-size: clamp(0.6rem, 0.8vw, 0.7rem);
   color: rgba(255, 255, 255, 0.35);
 }
 
 .feature-tags {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
+  gap: 0.4rem;
 }
 
 .feature-tag {
-  padding: 3px 9px;
+  padding: 0.2rem 0.6rem;
   border-radius: 100px;
   background: rgba(255, 255, 255, 0.06);
   border: 1px solid rgba(255, 255, 255, 0.1);
-  font-size: 12px;
+  font-size: clamp(0.65rem, 0.85vw, 0.78rem);
   color: rgba(255, 255, 255, 0.6);
   white-space: nowrap;
 }
@@ -565,13 +569,13 @@ function selectModel(model: ModelSpec) {
 .try-btn {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  padding: 7px 14px;
-  border-radius: 8px;
+  gap: 0.25rem;
+  padding: clamp(0.4rem, 0.7vw, 0.5rem) clamp(0.6rem, 1vw, 0.9rem);
+  border-radius: 0.5rem;
   background: rgba(22, 93, 255, 0.15);
   border: 1px solid rgba(22, 93, 255, 0.3);
   color: #79abff;
-  font-size: 13px;
+  font-size: clamp(0.7rem, 0.9vw, 0.85rem);
   font-weight: 500;
   text-decoration: none;
   white-space: nowrap;
@@ -586,7 +590,7 @@ function selectModel(model: ModelSpec) {
 
 /* Model detail panel */
 .model-detail {
-  padding: 24px;
+  padding: clamp(1rem, 2vw, 1.5rem);
   border-top: 1px solid rgba(255, 255, 255, 0.08);
   background: rgba(22, 93, 255, 0.05);
 }
@@ -595,29 +599,29 @@ function selectModel(model: ModelSpec) {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  margin-bottom: 12px;
+  margin-bottom: clamp(0.5rem, 1vw, 0.75rem);
 }
 
 .detail-name {
-  font-size: 20px;
+  font-size: clamp(1rem, 1.4vw, 1.25rem);
   font-weight: 700;
   color: #fff;
-  margin: 0 0 4px;
+  margin: 0 0 0.25rem;
 }
 
 .detail-api {
-  font-size: 13px;
+  font-size: clamp(0.7rem, 0.9vw, 0.85rem);
   color: rgba(255, 255, 255, 0.4);
   font-family: monospace;
   background: rgba(255, 255, 255, 0.06);
-  padding: 2px 8px;
-  border-radius: 4px;
+  padding: 0.1rem 0.5rem;
+  border-radius: 0.25rem;
 }
 
 .detail-close {
-  width: 32px;
-  height: 32px;
-  border-radius: 8px;
+  width: clamp(1.6rem, 2.2vw, 2rem);
+  height: clamp(1.6rem, 2.2vw, 2rem);
+  border-radius: 0.5rem;
   border: 1px solid rgba(255, 255, 255, 0.1);
   background: transparent;
   color: rgba(255, 255, 255, 0.5);
@@ -625,7 +629,7 @@ function selectModel(model: ModelSpec) {
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 16px;
+  font-size: clamp(0.85rem, 1.05vw, 1rem);
   transition: all 0.2s;
 }
 
@@ -635,38 +639,38 @@ function selectModel(model: ModelSpec) {
 }
 
 .detail-description {
-  font-size: 14px;
+  font-size: clamp(0.75rem, 0.95vw, 0.9rem);
   color: rgba(255, 255, 255, 0.6);
   line-height: 1.6;
-  margin: 0 0 20px;
+  margin: 0 0 clamp(0.75rem, 1.5vw, 1.25rem);
 }
 
 .detail-stats {
   display: flex;
-  gap: 12px;
-  margin-bottom: 16px;
+  gap: 0.75rem;
+  margin-bottom: 1rem;
   flex-wrap: wrap;
 }
 
 .stat-card {
   flex: 1;
-  min-width: 120px;
-  padding: 14px 16px;
+  min-width: 7.5rem;
+  padding: clamp(0.6rem, 1.2vw, 0.9rem) clamp(0.75rem, 1.4vw, 1rem);
   background: rgba(255, 255, 255, 0.04);
   border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 10px;
+  border-radius: 0.6rem;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 0.4rem;
 }
 
 .stat-label {
-  font-size: 12px;
+  font-size: clamp(0.65rem, 0.85vw, 0.78rem);
   color: rgba(255, 255, 255, 0.4);
 }
 
 .stat-value {
-  font-size: 18px;
+  font-size: clamp(1rem, 1.3vw, 1.15rem);
   font-weight: 700;
   color: #fff;
 }
@@ -674,18 +678,18 @@ function selectModel(model: ModelSpec) {
 .detail-features {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
-  margin-bottom: 20px;
+  gap: 0.5rem;
+  margin-bottom: clamp(0.75rem, 1.5vw, 1.25rem);
 }
 
 .detail-try-btn {
   display: inline-flex;
   align-items: center;
-  padding: 10px 24px;
-  border-radius: 8px;
+  padding: clamp(0.5rem, 1vw, 0.65rem) clamp(1rem, 1.8vw, 1.5rem);
+  border-radius: 0.5rem;
   background: #165dff;
   color: #fff;
-  font-size: 14px;
+  font-size: clamp(0.8rem, 1vw, 0.9rem);
   font-weight: 600;
   text-decoration: none;
   transition: background-color 0.2s;

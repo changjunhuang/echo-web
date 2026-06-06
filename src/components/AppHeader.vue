@@ -2,7 +2,6 @@
   <header class="app-header">
     <div class="header-inner">
       <RouterLink to="/" class="logo">
-        <span class="logo-icon">⚡</span>
         <span class="logo-text">Echo Web</span>
       </RouterLink>
       <nav class="nav">
@@ -46,45 +45,41 @@ const navItems = [
 }
 
 .header-inner {
-  max-width: 1280px;
+  max-width: 90rem;
   margin: 0 auto;
-  height: 60px;
+  height: clamp(3.25rem, 6vh, 4.5rem);
   display: flex;
   align-items: center;
-  padding: 0 24px;
-  gap: 32px;
+  padding: 0 clamp(1rem, 2vw, 1.75rem);
+  gap: clamp(1rem, 2.5vw, 2rem);
 }
 
 .logo {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 0.5rem;
   text-decoration: none;
   flex-shrink: 0;
 }
 
-.logo-icon {
-  font-size: 22px;
-}
-
 .logo-text {
-  font-size: 18px;
+  font-size: clamp(1rem, 1.3vw, 1.2rem);
   font-weight: 700;
   color: #fff;
-  letter-spacing: -0.3px;
+  letter-spacing: -0.02em;
 }
 
 .nav {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 0.25rem;
   flex: 1;
 }
 
 .nav-item {
-  padding: 6px 14px;
-  border-radius: 6px;
-  font-size: 14px;
+  padding: 0.4rem 0.85rem;
+  border-radius: 0.4rem;
+  font-size: clamp(0.8rem, 1vw, 0.95rem);
   font-weight: 500;
   color: rgba(255, 255, 255, 0.65);
   text-decoration: none;
@@ -108,10 +103,10 @@ const navItems = [
 .admin-btn {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 6px 14px;
-  border-radius: 6px;
-  font-size: 14px;
+  gap: 0.4rem;
+  padding: 0.4rem 0.85rem;
+  border-radius: 0.4rem;
+  font-size: clamp(0.8rem, 1vw, 0.95rem);
   font-weight: 500;
   color: rgba(255, 255, 255, 0.65);
   text-decoration: none;

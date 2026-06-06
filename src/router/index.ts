@@ -13,10 +13,10 @@ const routes: RouteRecordRaw[] = [
     meta: { title: '首页' },
   },
   {
-    path: '/chat',
-    name: 'Chat',
-    component: () => import('@/views/chat/ChatPage.vue'),
-    meta: { title: '智能对话' },
+    path: '/register',
+    name: 'Register',
+    component: () => import('@/views/auth/RegisterPage.vue'),
+    meta: { title: '注册账号' },
   },
   {
     path: '/admin',
@@ -24,7 +24,13 @@ const routes: RouteRecordRaw[] = [
     children: [
       {
         path: '',
-        redirect: '/admin/upload',
+        redirect: '/chat',
+      },
+      {
+        path: '/chat',
+        name: 'Chat',
+        component: () => import('@/views/chat/ChatPage.vue'),
+        meta: { title: '智能对话', fullBleed: true },
       },
       {
         path: 'upload',
