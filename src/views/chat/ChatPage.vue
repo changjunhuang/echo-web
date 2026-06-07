@@ -46,22 +46,64 @@
         <div class="empty-content">
           <h2 class="empty-title">ECHO</h2>
           <p class="empty-subtitle">即刻为你解答</p>
-          <div class="empty-input-wrapper">
+          <div class="empty-input-wrapper" :class="{ 'empty-input-wrapper--recording': isListening }">
             <el-input
               v-model="emptyInputText"
               type="textarea"
               :rows="1"
               :autosize="{ minRows: 1, maxRows: 4 }"
-              placeholder="输入消息，Shift+Enter 换行"
+              :placeholder="emptyInputPlaceholder"
               class="empty-input"
               @keydown.enter.exact.prevent="handleEmptySend"
+              :disabled="isListening"
             />
+            <div class="empty-input-actions">
+              <button
+                v-if="!speech.isSupported"
+                class="empty-mic-btn empty-mic-btn--disabled"
+                disabled
+                title="当前浏览器不支持语音识别"
+              >
+                <el-icon><Microphone /></el-icon>
+              </button>
+              <button
+                v-else-if="isListening"
+                class="empty-mic-btn empty-mic-btn--recording"
+                @click="handleToggleMic"
+                title="停止录音"
+              >
+                <el-icon><VideoPause /></el-icon>
+              </button>
+              <button
+                v-else
+                class="empty-mic-btn"
+                @click="handleToggleMic"
+                title="开始语音输入"
+              >
+                <el-icon><Microphone /></el-icon>
+              </button>
+              <button
+                class="empty-send-btn"
+                :disabled="!emptyInputText.trim()"
+                @click="handleEmptySend"
+              >
+                <el-icon><Promotion /></el-icon>
+              </button>
+            </div>
+          </div>
+          <div v-if="isListening" class="recording-hint recording-hint--empty">
+            <span class="recording-dot" />
+            <span class="recording-label">正在聆听…</span>
+            <span v-if="displayInterim" class="recording-interim">{{ displayInterim }}</span>
+            <span v-else class="recording-interim recording-interim--placeholder">请开始讲话</span>
             <button
-              class="empty-send-btn"
-              :disabled="!emptyInputText.trim()"
-              @click="handleEmptySend"
+              class="recording-abort-btn"
+              type="button"
+              @click="handleAbort"
+              title="终止本次语音"
             >
-              <el-icon><Promotion /></el-icon>
+              <el-icon><CircleClose /></el-icon>
+              <span>终止</span>
             </button>
           </div>
           <div class="quick-starts">
@@ -116,15 +158,40 @@
                     <button class="edit-btn edit-btn--save" @click="handleSaveEdit(msg.id)">发送</button>
                   </div>
                 </div>
-                <div v-else class="message-content" v-html="renderMarkdown(msg.content)" />
-                <div v-if="msg.role === 'assistant' && msg.imageUrl" class="message-image">
-                  <el-image
-                    :src="msg.imageUrl"
-                    :preview-src-list="[msg.imageUrl]"
-                    fit="contain"
-                    class="chat-image"
-                  />
-                </div>
+                <template v-else>
+                  <!-- 语音消息：播报按钮 + 识别文本框 -->
+                  <div v-if="msg.source === 'voice'" class="voice-block">
+                    <div class="voice-block__header">
+                      <el-icon class="voice-block__icon"><Microphone /></el-icon>
+                      <span class="voice-block__label">语音消息</span>
+                    </div>
+                    <button
+                      class="voice-play-btn"
+                      :class="{ 'voice-play-btn--playing': speakingId === msg.id }"
+                      @click="handleTogglePlay(msg)"
+                      :title="speakingId === msg.id ? '停止播报' : '语音播报'"
+                    >
+                      <el-icon>
+                        <VideoPause v-if="speakingId === msg.id" />
+                        <VideoPlay v-else />
+                      </el-icon>
+                      <span>{{ speakingId === msg.id ? '停止播报' : '语音播报' }}</span>
+                    </button>
+                    <div class="voice-text-box" :title="msg.content">
+                      {{ msg.content || '(未识别到内容)' }}
+                    </div>
+                  </div>
+                  <!-- 普通文本消息 -->
+                  <div v-else class="message-content" v-html="renderMarkdown(msg.content)" />
+                  <div v-if="msg.role === 'assistant' && msg.imageUrl" class="message-image">
+                    <el-image
+                      :src="msg.imageUrl"
+                      :preview-src-list="[msg.imageUrl]"
+                      fit="contain"
+                      class="chat-image"
+                    />
+                  </div>
+                </template>
               </div>
               <div class="message-actions" v-if="msg.role === 'user' && !editingMessageId">
                 <button class="action-btn" @click="handleCopy(msg.content)" title="复制">
@@ -160,18 +227,44 @@
 
         <!-- Input area -->
         <div class="input-area">
-          <div class="input-wrapper">
+          <div class="input-wrapper" :class="{ 'input-wrapper--recording': isListening }">
             <el-input
               v-model="inputText"
               type="textarea"
               :rows="1"
               :autosize="{ minRows: 1, maxRows: 8 }"
-              placeholder="输入消息，Shift+Enter 换行"
+              :placeholder="inputPlaceholder"
               class="chat-input"
               @keydown.enter.exact.prevent="handleSend"
-              :disabled="chatStore.isStreaming"
+              :disabled="chatStore.isStreaming || isListening"
             />
             <div class="input-actions">
+              <!-- 语音输入按钮（不支持的浏览器渲染为禁用态） -->
+              <button
+                v-if="!speech.isSupported"
+                class="mic-btn mic-btn--disabled"
+                disabled
+                title="当前浏览器不支持语音识别"
+              >
+                <el-icon><Microphone /></el-icon>
+              </button>
+              <button
+                v-else-if="isListening"
+                class="mic-btn mic-btn--recording"
+                @click="handleToggleMic"
+                title="停止录音"
+              >
+                <el-icon><VideoPause /></el-icon>
+              </button>
+              <button
+                v-else
+                class="mic-btn"
+                :disabled="chatStore.isStreaming"
+                @click="handleToggleMic"
+                title="开始语音输入"
+              >
+                <el-icon><Microphone /></el-icon>
+              </button>
               <button
                 v-if="chatStore.isStreaming"
                 class="stop-btn"
@@ -191,6 +284,22 @@
               </button>
             </div>
           </div>
+          <!-- 录音实时状态：显示在输入框正下方 -->
+          <div v-if="isListening" class="recording-hint">
+            <span class="recording-dot" />
+            <span class="recording-label">正在聆听…</span>
+            <span v-if="displayInterim" class="recording-interim">{{ displayInterim }}</span>
+            <span v-else class="recording-interim recording-interim--placeholder">请开始讲话</span>
+            <button
+              class="recording-abort-btn"
+              type="button"
+              @click="handleAbort"
+              title="终止本次语音"
+            >
+              <el-icon><CircleClose /></el-icon>
+              <span>终止</span>
+            </button>
+          </div>
         </div>
       </template>
     </div>
@@ -198,7 +307,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, nextTick, watch, onMounted } from 'vue'
+import { ref, nextTick, watch, onMounted, computed } from 'vue'
 import {
   Plus,
   Close,
@@ -206,16 +315,21 @@ import {
   UserFilled,
   Promotion,
   VideoPause,
+  VideoPlay,
   CopyDocument,
   RefreshRight,
   Edit,
   DArrowLeft,
   DArrowRight,
+  Microphone,
+  CircleClose,
 } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { useChatStore } from '@/stores/chat'
-import type { ChatSession } from '@/types/chat'
+import type { ChatSession, Message } from '@/types/chat'
 import { sendChatMessageStream } from '@/api/chat'
+import { useSpeechRecognition } from '@/composables/useSpeechRecognition'
+import { useSpeechSynthesis } from '@/composables/useSpeechSynthesis'
 
 const chatStore = useChatStore()
 const inputText = ref('')
@@ -225,9 +339,106 @@ let abortController: AbortController | null = null
 const editingMessageId = ref<string | null>(null)
 const editingText = ref('')
 const sidebarCollapsed = ref(false)
+/** 标记下一条待发送消息的来源（语音 / 文本），handleSend 消费后重置为 text */
+const pendingSource = ref<'text' | 'voice'>('text')
+
+/* ---- 语音识别（STT） ---- */
+const speech = useSpeechRecognition({
+  lang: 'zh-CN',
+  continuous: true,
+  interimResults: true,
+  onError: (msg) => {
+    // 不支持 / 没有权限 / 麦克风未授权等情况，提示用户
+    if (msg === 'not-allowed' || msg === 'service-not-allowed') {
+      ElMessage.error('麦克风权限被拒绝，请在浏览器设置中允许后重试')
+    } else if (msg === 'no-speech') {
+      // 静默超时，常见且无需打扰
+      console.info('[chat] no speech detected, stopped silently')
+    } else if (msg === 'aborted') {
+      // 用户主动点击"终止"：不再弹"语音识别失败"这种带负面语义的提示，
+      // 改用更优雅的 info 提示，让用户知道动作已被响应
+      console.info('[chat] voice input aborted by user')
+      ElMessage.info('已终止本次语音')
+    } else {
+      ElMessage.warning(`语音识别失败: ${msg}`)
+    }
+  },
+})
+const isListening = speech.isListening
+
+/** 录音时给输入框的占位提示（静态计算一次） */
+const inputPlaceholder = computed(() =>
+  isListening.value ? '正在聆听… 松开或点击麦克风结束' : '输入消息，Shift+Enter 换行',
+)
+
+/** 空状态输入框的占位提示（与对话态共用同一个录音状态） */
+const emptyInputPlaceholder = computed(() =>
+  isListening.value ? '正在聆听… 点击麦克风结束' : '输入消息，Shift+Enter 换行',
+)
+
+/** 录音中展示的实时文字：已敲定 + 中间结果 */
+const displayInterim = computed(() => {
+  const finalized = speech.transcript.value.trim()
+  const interim = speech.interimTranscript.value.trim()
+  if (finalized && interim) return `${finalized} ${interim}`
+  return finalized || interim
+})
+
+/* ---- 语音播报（TTS） ---- */
+const tts = useSpeechSynthesis('zh-CN')
+/** 正在播报的消息 id；同一时刻只播一条 */
+const speakingId = ref<string | null>(null)
+
+/** 切换录音状态 */
+function handleToggleMic() {
+  if (isListening.value) {
+    speech.stop()
+    return
+  }
+  // 若已有文字，保留；点击后新的内容会追加
+  speech.reset()
+  speech.start()
+}
+
+/**
+ * 主动终止本次录音：说错了话或不想继续时调用。
+ * abort() 会同步清空已收集的 transcript，避免 watch 把半句话自动发送出去。
+ */
+function handleAbort() {
+  if (!isListening.value) return
+  speech.abort()
+  console.info('[chat] user aborted current voice input')
+}
+
+/** 切换语音播报 */
+function handleTogglePlay(msg: Message) {
+  if (speakingId.value === msg.id) {
+    tts.stop()
+    speakingId.value = null
+    return
+  }
+  // 切换到新消息前先停掉上一条
+  tts.stop()
+  speakingId.value = msg.id
+  tts.speak(msg.content)
+  // 通过 setInterval 监测 isSpeaking 回落（speechSynthesis 没有 end 回调的可靠通道）
+  const timer = setInterval(() => {
+    if (!tts.isSpeaking.value) {
+      speakingId.value = null
+      clearInterval(timer)
+    }
+  }, 250)
+}
 
 onMounted(() => {
   chatStore.initDefaultSession()
+  // 部分浏览器（Chromium 系）首次调用前 getVoices 列表为空，
+  // 在这里注册一次 voiceschanged 以便后续 pickVoice 能拿到中文音色。
+  if ('speechSynthesis' in window) {
+    window.speechSynthesis.onvoiceschanged = () => {
+      console.info('[tts] voices loaded: %d', window.speechSynthesis.getVoices().length)
+    }
+  }
 })
 
 const quickStarts = [
@@ -308,7 +519,10 @@ async function handleSend() {
   }
 
   inputText.value = ''
-  chatStore.addMessage(sessionId, { role: 'user', content: text })
+  // 由调用方决定消息来源（语音 / 键盘），默认 text
+  const source = pendingSource.value
+  pendingSource.value = 'text'
+  chatStore.addMessage(sessionId, { role: 'user', content: text, source })
   await scrollToBottom()
 
   chatStore.isStreaming = true
@@ -373,18 +587,20 @@ async function handleCopy(content: string) {
   }
 }
 
-async function handleRetry(msg: { id: string; content: string }) {
+async function handleRetry(msg: Message) {
   const sessionId = chatStore.currentSessionId
   if (!sessionId || chatStore.isStreaming) return
 
   const session = chatStore.sessions.find((s) => s.id === sessionId)
   if (!session) return
 
+  // 重试时若原消息是语音，保持来源标记
+  pendingSource.value = msg.source ?? 'text'
   inputText.value = msg.content
   await handleSend()
 }
 
-function handleEdit(msg: { id: string; content: string }) {
+function handleEdit(msg: Message) {
   editingMessageId.value = msg.id
   editingText.value = msg.content
 }
@@ -402,7 +618,11 @@ async function handleSaveEdit(msgId: string) {
   const msgIndex = session.messages.findIndex((m) => m.id === msgId)
   if (msgIndex === -1) return
 
-  session.messages[msgIndex].content = newContent
+  const original = session.messages[msgIndex]
+  // 编辑后保留原来源标记
+  pendingSource.value = original.source ?? 'text'
+
+  original.content = newContent
   editingMessageId.value = null
   editingText.value = ''
 
@@ -419,6 +639,41 @@ function handleCancelEdit() {
   editingMessageId.value = null
   editingText.value = ''
 }
+
+/**
+ * 语音识别完成后，浏览器触发 onend。
+ * 这里把最终文本灌进输入框，并自动发送给后端。
+ * 失败/空文本则不发送。
+ * 同时兼容空状态（未创建会话）与对话态两种场景。
+ */
+watch(
+  () => speech.isListening.value,
+  async (listening, prev) => {
+    if (!prev || listening) return
+    // 录音刚结束
+    const finalText = speech.transcript.value.trim()
+    if (!finalText) {
+      // 没有识别到内容时（如长时间静默被自动结束），保留 input 原值
+      speech.reset()
+      return
+    }
+    speech.reset()
+
+    if (!chatStore.currentSession) {
+      // 空状态：把识别文本灌进 emptyInputText，触发首次发送（自动建会话）
+      const prefix = emptyInputText.value.trim()
+      emptyInputText.value = prefix ? `${prefix} ${finalText}` : finalText
+      await handleEmptySend()
+      return
+    }
+
+    // 对话态：追加到 inputText，标记为语音来源，自动发送
+    const prefix = inputText.value.trim()
+    inputText.value = prefix ? `${prefix} ${finalText}` : finalText
+    pendingSource.value = 'voice'
+    await handleSend()
+  },
+)
 
 watch(
   () => chatStore.currentSessionId,
@@ -639,6 +894,10 @@ watch(
   border-color: rgba(22, 93, 255, 0.5);
 }
 
+.empty-input-wrapper--recording {
+  border-color: rgba(245, 63, 63, 0.5);
+}
+
 .empty-input {
   flex: 1;
 }
@@ -656,6 +915,49 @@ watch(
 
 :deep(.empty-input .el-textarea__inner::placeholder) {
   color: rgba(255, 255, 255, 0.35);
+}
+
+.empty-input-actions {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.empty-mic-btn {
+  width: clamp(2rem, 2.5vw, 2.4rem);
+  height: clamp(2rem, 2.5vw, 2.4rem);
+  border-radius: 0.6rem;
+  border: none;
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.85);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: clamp(0.9rem, 1.1vw, 1.05rem);
+  transition: all 0.2s;
+  margin-right: 0.4rem;
+  flex-shrink: 0;
+}
+
+.empty-mic-btn:not(.empty-mic-btn--disabled):hover {
+  background: rgba(22, 93, 255, 0.3);
+  color: #fff;
+}
+
+.empty-mic-btn--recording {
+  background: rgba(245, 63, 63, 0.25);
+  color: #f56c6c;
+  animation: mic-pulse 1.4s ease-in-out infinite;
+}
+
+.empty-mic-btn--recording:hover {
+  background: rgba(245, 63, 63, 0.4);
+}
+
+.empty-mic-btn--disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
 }
 
 .empty-send-btn {
@@ -1004,5 +1306,215 @@ watch(
 .chat-image {
   width: 100%;
   border-radius: 0.75rem;
+}
+
+/* ===================== 语音相关样式 ===================== */
+
+/* 输入框左下角：录音中提示 */
+.recording-hint {
+  max-width: 55rem;
+  margin: 0.4rem auto 0;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.4rem 0.75rem;
+  border-radius: 0.5rem;
+  background: rgba(245, 63, 63, 0.08);
+  border: 1px solid rgba(245, 63, 63, 0.35);
+  color: rgba(255, 255, 255, 0.85);
+  font-size: clamp(0.75rem, 0.95vw, 0.85rem);
+  overflow: hidden;
+}
+
+/* 空状态下的录音提示：紧贴输入框下方，宽度跟随 .empty-input-wrapper */
+.recording-hint--empty {
+  max-width: 45rem;
+  margin: 0.5rem auto 0.75rem;
+}
+
+.recording-dot {
+  width: 0.55rem;
+  height: 0.55rem;
+  border-radius: 50%;
+  background: #f56c6c;
+  flex-shrink: 0;
+  animation: pulse 1.2s ease-in-out infinite;
+}
+
+.recording-label {
+  color: #f56c6c;
+  font-weight: 500;
+  flex-shrink: 0;
+}
+
+.recording-interim {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: rgba(255, 255, 255, 0.75);
+}
+
+.recording-interim--placeholder {
+  color: rgba(255, 255, 255, 0.35);
+  font-style: italic;
+}
+
+.recording-abort-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  margin-left: auto;
+  flex-shrink: 0;
+  padding: 0.25rem 0.6rem;
+  border-radius: 0.4rem;
+  border: 1px solid rgba(245, 63, 63, 0.45);
+  background: rgba(245, 63, 63, 0.12);
+  color: #ffb3b3;
+  font-size: clamp(0.7rem, 0.85vw, 0.8rem);
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.recording-abort-btn:hover {
+  background: rgba(245, 63, 63, 0.25);
+  border-color: rgba(245, 63, 63, 0.7);
+  color: #fff;
+}
+
+.recording-abort-btn .el-icon {
+  font-size: 0.95rem;
+}
+
+.input-wrapper--recording {
+  border-color: rgba(245, 63, 63, 0.5);
+}
+
+/* 麦克风按钮 */
+.mic-btn {
+  width: clamp(2rem, 2.5vw, 2.4rem);
+  height: clamp(2rem, 2.5vw, 2.4rem);
+  border-radius: 0.6rem;
+  border: none;
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.85);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: clamp(0.9rem, 1.1vw, 1.05rem);
+  transition: all 0.2s;
+  margin-right: 0.4rem;
+  flex-shrink: 0;
+}
+
+.mic-btn:not(.mic-btn--disabled):not(:disabled):hover {
+  background: rgba(22, 93, 255, 0.3);
+  color: #fff;
+}
+
+.mic-btn--recording {
+  background: rgba(245, 63, 63, 0.25);
+  color: #f56c6c;
+  animation: mic-pulse 1.4s ease-in-out infinite;
+}
+
+.mic-btn--recording:hover {
+  background: rgba(245, 63, 63, 0.4);
+}
+
+.mic-btn--disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.mic-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+@keyframes mic-pulse {
+  0%, 100% {
+    box-shadow: 0 0 0 0 rgba(245, 63, 63, 0.55);
+  }
+  50% {
+    box-shadow: 0 0 0 0.5rem rgba(245, 63, 63, 0);
+  }
+}
+
+/* 用户消息内的语音块：播报按钮 + 文本框 */
+.voice-block {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.5rem;
+  min-width: 12rem;
+  max-width: 100%;
+}
+
+.voice-block__header {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-size: clamp(0.7rem, 0.85vw, 0.78rem);
+  color: rgba(255, 255, 255, 0.75);
+  opacity: 0.85;
+}
+
+.voice-block__icon {
+  font-size: 0.9rem;
+}
+
+.voice-block__label {
+  font-weight: 500;
+  letter-spacing: 0.02em;
+}
+
+.voice-play-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.35rem 0.85rem;
+  border-radius: 0.5rem;
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  background: rgba(255, 255, 255, 0.1);
+  color: #fff;
+  font-size: clamp(0.75rem, 0.9vw, 0.85rem);
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.voice-play-btn:hover {
+  background: rgba(255, 255, 255, 0.2);
+  border-color: rgba(255, 255, 255, 0.55);
+}
+
+.voice-play-btn--playing {
+  background: rgba(245, 63, 63, 0.25);
+  border-color: rgba(245, 63, 63, 0.55);
+  color: #ffd5d5;
+}
+
+.voice-play-btn--playing:hover {
+  background: rgba(245, 63, 63, 0.35);
+}
+
+.voice-text-box {
+  width: 100%;
+  min-width: 12rem;
+  max-width: 28rem;
+  padding: 0.5rem 0.7rem;
+  border-radius: 0.4rem;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  color: rgba(255, 255, 255, 0.92);
+  font-size: clamp(0.8rem, 1vw, 0.92rem);
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.05);
 }
 </style>

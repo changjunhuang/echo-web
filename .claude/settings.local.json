@@ -54,7 +54,8 @@
       "Bash(cp \"C:/tmp/echo-test/captcha-diag.mjs\" /tmp/echo-test/captcha-diag.mjs)",
       "Bash(node captcha-diag.mjs)",
       "Bash(go version *)",
-      "Bash(npx --no-install vue-tsc --noEmit)"
+      "Bash(npx --no-install vue-tsc --noEmit)",
+      "Bash(git stash *)"
     ]
   }
 }

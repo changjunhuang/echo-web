@@ -3,6 +3,8 @@ export interface Message {
   role: 'user' | 'assistant' | 'system'
   content: string
   imageUrl?: string
+  /** 消息来源：text = 键盘输入，voice = 语音识别；默认 text */
+  source?: 'text' | 'voice'
   createdAt: number
 }
 
