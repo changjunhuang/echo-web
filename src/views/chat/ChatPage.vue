@@ -59,6 +59,15 @@
             />
             <div class="empty-input-actions">
               <button
+                class="empty-autoplay-btn"
+                :class="{ 'empty-autoplay-btn--on': autoPlay }"
+                @click="handleToggleAutoPlay"
+                :title="autoPlay ? '自动播报已开启，点击关闭' : '自动播报已关闭，点击开启'"
+              >
+                <el-icon><Headset v-if="autoPlay" /><Mute v-else /></el-icon>
+                <span>自动播报</span>
+              </button>
+              <button
                 v-if="!speech.isSupported"
                 class="empty-mic-btn empty-mic-btn--disabled"
                 disabled
@@ -239,6 +248,16 @@
               :disabled="chatStore.isStreaming || isListening"
             />
             <div class="input-actions">
+              <!-- 自动播报开关 -->
+              <button
+                class="autoplay-btn"
+                :class="{ 'autoplay-btn--on': autoPlay }"
+                @click="handleToggleAutoPlay"
+                :title="autoPlay ? '自动播报已开启，点击关闭' : '自动播报已关闭，点击开启'"
+              >
+                <el-icon><Headset v-if="autoPlay" /><Mute v-else /></el-icon>
+                <span>自动播报</span>
+              </button>
               <!-- 语音输入按钮（不支持的浏览器渲染为禁用态） -->
               <button
                 v-if="!speech.isSupported"
@@ -323,6 +342,8 @@ import {
   DArrowRight,
   Microphone,
   CircleClose,
+  Headset,
+  Mute,
 } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { useChatStore } from '@/stores/chat'
@@ -342,92 +363,199 @@ const sidebarCollapsed = ref(false)
 /** 标记下一条待发送消息的来源（语音 / 文本），handleSend 消费后重置为 text */
 const pendingSource = ref<'text' | 'voice'>('text')
 
-/* ---- 语音识别（STT） ---- */
+/** 是否在流式响应结束后自动播报后端消息；持久化到 localStorage */
+const AUTO_PLAY_KEY = 'chat_auto_play'
+function loadAutoPlay(): boolean {
+  try {
+    const v = localStorage.getItem(AUTO_PLAY_KEY)
+    if (v === null) return true // 默认开启
+    return v === '1'
+  } catch {
+    return true
+  }
+}
+const autoPlay = ref(loadAutoPlay())
+
+/* ---- 语音播报（TTS）状态先声明，下方 STT handler 也要用 ---- */
+/** 正在播报的消息 id；同一时刻只播一条 */
+const speakingId = ref<string | null>(null)
+
+/**
+ * 流式响应结束后，是否应该把录音重新拉起来。
+ * 触发场景：用户开着录音 → 发了句 → 等待响应时我们主动停了录音。
+ * 响应结束（流式 done / 主动 stop / TTS 结束）后再恢复。
+ */
+const shouldResumeListening = ref(false)
+
+/* ---- 语音识别（STT，连续模式 + VAD 断句） ---- */
+// 关键修复：之前漏挂 onSentence，导致 VAD 断句后识别出的文本无人消费，
+// 看上去就是"说完话不断句、不发送"。现在把 handleSentence 接上去。
 const speech = useSpeechRecognition({
   lang: 'zh-CN',
   continuous: true,
   interimResults: true,
+  silenceTimeoutMs: 1200,
+  // VAD 检测到一句话结束（连续模式 + 静默超时）时回调。
+  // 在这里把识别文本送进输入框 / 自动发送给后端。
+  onSentence: (text) => {
+    void handleSentence(text)
+  },
   onError: (msg) => {
     // 不支持 / 没有权限 / 麦克风未授权等情况，提示用户
     if (msg === 'not-allowed' || msg === 'service-not-allowed') {
       ElMessage.error('麦克风权限被拒绝，请在浏览器设置中允许后重试')
     } else if (msg === 'no-speech') {
       // 静默超时，常见且无需打扰
-      console.info('[chat] no speech detected, stopped silently')
+      console.info('[chat] no speech detected')
     } else if (msg === 'aborted') {
-      // 用户主动点击"终止"：不再弹"语音识别失败"这种带负面语义的提示，
-      // 改用更优雅的 info 提示，让用户知道动作已被响应
       console.info('[chat] voice input aborted by user')
       ElMessage.info('已终止本次语音')
     } else {
       ElMessage.warning(`语音识别失败: ${msg}`)
     }
   },
+  // 用户主动停止（点麦克风 / 离开页面）后清掉"待恢复"标记
+  onEnd: () => {
+    shouldResumeListening.value = false
+    console.info('[chat] voice session ended')
+  },
 })
 const isListening = speech.isListening
 
 /** 录音时给输入框的占位提示（静态计算一次） */
 const inputPlaceholder = computed(() =>
-  isListening.value ? '正在聆听… 松开或点击麦克风结束' : '输入消息，Shift+Enter 换行',
+  isListening.value ? '正在聆听… 说完后自动发送' : '输入消息，Shift+Enter 换行',
 )
 
 /** 空状态输入框的占位提示（与对话态共用同一个录音状态） */
 const emptyInputPlaceholder = computed(() =>
-  isListening.value ? '正在聆听… 点击麦克风结束' : '输入消息，Shift+Enter 换行',
+  isListening.value ? '正在聆听… 说完后自动发送' : '输入消息，Shift+Enter 换行',
 )
 
 /** 录音中展示的实时文字：已敲定 + 中间结果 */
 const displayInterim = computed(() => {
-  const finalized = speech.transcript.value.trim()
+  const finalized = speech.currentSentence.value.trim()
   const interim = speech.interimTranscript.value.trim()
   if (finalized && interim) return `${finalized} ${interim}`
   return finalized || interim
 })
 
 /* ---- 语音播报（TTS） ---- */
-const tts = useSpeechSynthesis('zh-CN')
-/** 正在播报的消息 id；同一时刻只播一条 */
-const speakingId = ref<string | null>(null)
+const tts = useSpeechSynthesis({
+  lang: 'zh-CN',
+  onStart: () => {
+    // onstart 内能拿到 speakingId（已在 speak() 之前设置好）
+    console.info('[chat] tts started, id=%s', speakingId.value ?? '')
+  },
+  onEnd: () => {
+    // 朗读结束（自然结束 / 主动 cancel 都算），清状态并恢复录音
+    speakingId.value = null
+    resumeListeningIfNeeded()
+  },
+  onError: (msg) => {
+    speakingId.value = null
+    resumeListeningIfNeeded()
+    console.warn('[chat] tts error: %s', msg)
+  },
+})
 
-/** 切换录音状态 */
+/** 持久化 autoPlay 状态：变更时写 localStorage；关闭时立即停播 */
+watch(autoPlay, (v) => {
+  try {
+    localStorage.setItem(AUTO_PLAY_KEY, v ? '1' : '0')
+  } catch {
+    /* ignore */
+  }
+  // 用户主动关闭时，立刻停掉正在播放的语音
+  if (!v) {
+    tts.stop()
+    speakingId.value = null
+  }
+})
+
+/** 切换录音状态（点麦克风） */
 function handleToggleMic() {
   if (isListening.value) {
     speech.stop()
     return
   }
-  // 若已有文字，保留；点击后新的内容会追加
   speech.reset()
   speech.start()
 }
 
 /**
  * 主动终止本次录音：说错了话或不想继续时调用。
- * abort() 会同步清空已收集的 transcript，避免 watch 把半句话自动发送出去。
+ * abort() 会同步清空已收集的 sentence，避免把半句话自动发送出去。
  */
 function handleAbort() {
   if (!isListening.value) return
   speech.abort()
+  shouldResumeListening.value = false
   console.info('[chat] user aborted current voice input')
 }
 
-/** 切换语音播报 */
+/**
+ * 语音识别检测到"断句"时的统一入口。
+ * - 空状态：把识别文本灌进 emptyInputText，自动建会话 + 发送
+ * - 对话态：直接灌进 inputText，标记为 voice 后自动发送
+ * 整个流程对用户透明：无需再点发送。
+ */
+async function handleSentence(text: string) {
+  if (!text) return
+  if (chatStore.isStreaming) {
+    // 极端情况：响应还没结束，识别器却提交了句子（理论上我们已停掉了识别器，
+    // 但保险起见）。丢弃并提示。
+    console.warn('[chat] sentence committed during streaming, dropped:', text)
+    return
+  }
+  if (!chatStore.currentSession) {
+    emptyInputText.value = text
+    await handleEmptySend()
+    return
+  }
+  inputText.value = text
+  pendingSource.value = 'voice'
+  await handleSend()
+}
+
+/** 切换自动播报开关 */
+function handleToggleAutoPlay() {
+  autoPlay.value = !autoPlay.value
+}
+
+/** 切换语音播报（点消息上的按钮手动播 / 停） */
 function handleTogglePlay(msg: Message) {
   if (speakingId.value === msg.id) {
     tts.stop()
     speakingId.value = null
+    // 手动停播不影响"是否恢复录音"——这里不需要 resume
     return
   }
   // 切换到新消息前先停掉上一条
   tts.stop()
   speakingId.value = msg.id
   tts.speak(msg.content)
-  // 通过 setInterval 监测 isSpeaking 回落（speechSynthesis 没有 end 回调的可靠通道）
-  const timer = setInterval(() => {
-    if (!tts.isSpeaking.value) {
-      speakingId.value = null
-      clearInterval(timer)
-    }
-  }, 250)
+}
+
+/**
+ * 在合适的时机重新拉起录音识别。
+ * - 仅当用户原本就开着录音（shouldResumeListening=true）才恢复
+ * - 当前不在听写中才启动（防止多次 stop/start 竞态）
+ * - 若还在流式响应中则推迟到 done 回调
+ */
+function resumeListeningIfNeeded() {
+  if (!shouldResumeListening.value) return
+  if (chatStore.isStreaming) return
+  if (!speech.isSupported.value) {
+    shouldResumeListening.value = false
+    return
+  }
+  shouldResumeListening.value = false
+  // 用 nextTick 把"恢复动作"放到所有状态更新之后，避免和 TTS 抢资源
+  nextTick(() => {
+    speech.reset()
+    speech.start()
+  })
 }
 
 onMounted(() => {
@@ -453,6 +581,9 @@ function toggleSidebar() {
 }
 
 function handleNewChat() {
+  // 新建会话时把录音相关状态也清掉，避免切会话后还在听
+  if (isListening.value) speech.stop()
+  shouldResumeListening.value = false
   chatStore.createSession()
 }
 
@@ -518,6 +649,14 @@ async function handleSend() {
     return
   }
 
+  // 在流式响应期间停掉录音，避免 TTS / 系统回声被识别成下一句
+  if (isListening.value) {
+    shouldResumeListening.value = true
+    speech.stop()
+  } else {
+    shouldResumeListening.value = false
+  }
+
   inputText.value = ''
   // 由调用方决定消息来源（语音 / 键盘），默认 text
   const source = pendingSource.value
@@ -560,11 +699,21 @@ async function handleSend() {
     () => {
       chatStore.isStreaming = false
       abortController = null
+      // 流式完成：若开启了自动播报，朗读最后一条 assistant 消息
+      if (autoPlay.value && lastMsg && lastMsg.content.trim()) {
+        speakingId.value = lastMsg.id
+        tts.speak(lastMsg.content)
+      } else {
+        // 不播报的情况下直接恢复录音
+        resumeListeningIfNeeded()
+      }
     },
     (error) => {
       chatStore.isStreaming = false
       abortController = null
       ElMessage.error(`请求失败: ${error.message}`)
+      // 失败时也恢复录音
+      resumeListeningIfNeeded()
     },
     async (imageUrl) => {
       chatStore.setMessageImageUrl(sessionId, imageUrl)
@@ -576,6 +725,9 @@ async function handleSend() {
 function handleStop() {
   abortController?.abort()
   chatStore.isStreaming = false
+  abortController = null
+  // 手动停流：onDone 不会触发，这里手动决定是否恢复录音
+  resumeListeningIfNeeded()
 }
 
 async function handleCopy(content: string) {
@@ -639,41 +791,6 @@ function handleCancelEdit() {
   editingMessageId.value = null
   editingText.value = ''
 }
-
-/**
- * 语音识别完成后，浏览器触发 onend。
- * 这里把最终文本灌进输入框，并自动发送给后端。
- * 失败/空文本则不发送。
- * 同时兼容空状态（未创建会话）与对话态两种场景。
- */
-watch(
-  () => speech.isListening.value,
-  async (listening, prev) => {
-    if (!prev || listening) return
-    // 录音刚结束
-    const finalText = speech.transcript.value.trim()
-    if (!finalText) {
-      // 没有识别到内容时（如长时间静默被自动结束），保留 input 原值
-      speech.reset()
-      return
-    }
-    speech.reset()
-
-    if (!chatStore.currentSession) {
-      // 空状态：把识别文本灌进 emptyInputText，触发首次发送（自动建会话）
-      const prefix = emptyInputText.value.trim()
-      emptyInputText.value = prefix ? `${prefix} ${finalText}` : finalText
-      await handleEmptySend()
-      return
-    }
-
-    // 对话态：追加到 inputText，标记为语音来源，自动发送
-    const prefix = inputText.value.trim()
-    inputText.value = prefix ? `${prefix} ${finalText}` : finalText
-    pendingSource.value = 'voice'
-    await handleSend()
-  },
-)
 
 watch(
   () => chatStore.currentSessionId,
@@ -921,6 +1038,46 @@ watch(
   display: flex;
   align-items: center;
   flex-shrink: 0;
+}
+
+/* 空状态下的自动播报开关：与主态风格保持一致 */
+.empty-autoplay-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  height: clamp(2rem, 2.5vw, 2.4rem);
+  padding: 0 0.7rem;
+  margin-right: 0.4rem;
+  border-radius: 0.6rem;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  background: rgba(255, 255, 255, 0.04);
+  color: rgba(255, 255, 255, 0.55);
+  font-size: clamp(0.7rem, 0.85vw, 0.8rem);
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s;
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.empty-autoplay-btn .el-icon {
+  font-size: clamp(0.9rem, 1.1vw, 1.05rem);
+}
+
+.empty-autoplay-btn:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: rgba(255, 255, 255, 0.85);
+}
+
+.empty-autoplay-btn--on {
+  background: rgba(22, 93, 255, 0.18);
+  border-color: rgba(22, 93, 255, 0.5);
+  color: #a9c3ff;
+}
+
+.empty-autoplay-btn--on:hover {
+  background: rgba(22, 93, 255, 0.3);
+  color: #fff;
 }
 
 .empty-mic-btn {
@@ -1257,6 +1414,46 @@ watch(
   flex-shrink: 0;
   display: flex;
   align-items: center;
+}
+
+/* 自动播报开关：放在麦克风左侧，文本按钮形态 */
+.autoplay-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  height: clamp(2rem, 2.5vw, 2.4rem);
+  padding: 0 0.7rem;
+  margin-right: 0.4rem;
+  border-radius: 0.6rem;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  background: rgba(255, 255, 255, 0.04);
+  color: rgba(255, 255, 255, 0.55);
+  font-size: clamp(0.7rem, 0.85vw, 0.8rem);
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s;
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.autoplay-btn .el-icon {
+  font-size: clamp(0.9rem, 1.1vw, 1.05rem);
+}
+
+.autoplay-btn:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: rgba(255, 255, 255, 0.85);
+}
+
+.autoplay-btn--on {
+  background: rgba(22, 93, 255, 0.18);
+  border-color: rgba(22, 93, 255, 0.5);
+  color: #a9c3ff;
+}
+
+.autoplay-btn--on:hover {
+  background: rgba(22, 93, 255, 0.3);
+  color: #fff;
 }
 
 .send-btn,
