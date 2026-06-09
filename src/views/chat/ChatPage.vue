@@ -7,6 +7,31 @@
           <el-icon><Plus /></el-icon>
           <span v-if="!sidebarCollapsed">新对话</span>
         </button>
+        <!-- 模式切换：文本对话 / 像素人物 -->
+        <div v-if="!sidebarCollapsed" class="mode-switcher" role="tablist" aria-label="对话模式">
+          <button
+            class="mode-switcher__btn"
+            :class="{ 'mode-switcher__btn--active': chatMode === 'text' }"
+            role="tab"
+            :aria-selected="chatMode === 'text'"
+            @click="handleSwitchMode('text')"
+            title="文本对话"
+          >
+            <el-icon><ChatDotRound /></el-icon>
+            <span>对话</span>
+          </button>
+          <button
+            class="mode-switcher__btn"
+            :class="{ 'mode-switcher__btn--active': chatMode === 'pixel' }"
+            role="tab"
+            :aria-selected="chatMode === 'pixel'"
+            @click="handleSwitchMode('pixel')"
+            title="像素人物"
+          >
+            <el-icon><UserFilled /></el-icon>
+            <span>像素</span>
+          </button>
+        </div>
       </div>
 
       <div class="sessions-list" v-show="!sidebarCollapsed">
@@ -41,6 +66,8 @@
 
     <!-- Main chat area -->
     <div class="chat-main">
+      <!-- ==================== 文本对话模式 ==================== -->
+      <div v-if="chatMode === 'text'" class="chat-mode chat-mode--text">
       <!-- Empty state -->
       <div v-if="!chatStore.currentSession" class="chat-empty">
         <div class="empty-content">
@@ -321,12 +348,187 @@
           </div>
         </div>
       </template>
+      </div>
+
+      <!-- ==================== 像素人物模式 ==================== -->
+      <div v-else class="chat-mode chat-mode--pixel">
+        <!-- 背景场景层：占满整个对话页 -->
+        <PixelScene class="pixel-mode__scene" />
+
+        <!-- 顶部浮动信息条 -->
+        <div class="pixel-topbar">
+          <div class="pixel-state-chip">
+            <span class="pixel-state-chip__dot" :class="`pixel-state-chip__dot--${pixelState}`" />
+            <span class="pixel-state-chip__label">
+              {{ pixelStateLabel }} · {{ EMOTION_LABELS[lastEmotion] }}
+            </span>
+          </div>
+          <div class="pixel-topbar__actions">
+            <button
+              class="pixel-mini-btn"
+              :class="{ 'pixel-mini-btn--on': historyOpen }"
+              @click="toggleHistory"
+              :title="historyOpen ? '关闭历史对话' : '查看历史对话'"
+            >
+              <el-icon><Document /></el-icon>
+              <span>历史</span>
+            </button>
+            <button
+              class="pixel-mini-btn"
+              :class="{ 'pixel-mini-btn--on': autoPlay }"
+              @click="handleToggleAutoPlay"
+              :title="autoPlay ? '已开启自动播报' : '已关闭自动播报'"
+            >
+              <el-icon><Headset v-if="autoPlay" /><Mute v-else /></el-icon>
+              <span>播报</span>
+            </button>
+            <button
+              v-if="tts.isSpeaking.value"
+              class="pixel-mini-btn pixel-mini-btn--danger"
+              @click="handlePixelStopSpeak"
+              title="停止播报"
+            >
+              <el-icon><VideoPause /></el-icon>
+              <span>停</span>
+            </button>
+            <button
+              class="pixel-mini-btn"
+              :class="{ 'pixel-mini-btn--on': pixelAutoListen, 'pixel-mini-btn--danger': isListening }"
+              @click="pixelAutoListen ? stopPixelAutoListen() : startPixelAutoListen()"
+              :title="pixelAutoListen ? '关闭自动语音对话' : '开启自动语音对话'"
+            >
+              <el-icon><Microphone v-if="!isListening" /><VideoPause v-else /></el-icon>
+              <span>{{ isListening ? '正在听' : pixelAutoListen ? '语音开' : '语音关' }}</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- 角色居中展示 -->
+        <div class="pixel-mode__character-wrap">
+          <PixelCharacter
+            :state="pixelState"
+            :talking="isPixelTalking"
+            :size="characterSize"
+            class="pixel-mode__character"
+          />
+          <div class="pixel-mode__hint">{{ pixelHint }}</div>
+        </div>
+
+        <!-- 对白区：字幕式交替（默认仅显示当前轮次） -->
+        <div class="pixel-mode__dialogue">
+          <transition name="subtitle-fade" mode="out-in">
+            <!-- 1. 用户刚说完 / 正在听写中 -->
+            <div
+              v-if="activeSubtitle === 'user' && (pixelUserText || isListening)"
+              key="user"
+              class="subtitle subtitle--user"
+            >
+              <div class="subtitle__avatar">你</div>
+              <div class="subtitle__bubble">
+                <div class="subtitle__name">你</div>
+                <div class="subtitle__content">
+                  <template v-if="pixelUserText">{{ pixelUserText }}</template>
+                  <template v-else-if="displayInterim">{{ displayInterim }}</template>
+                  <template v-else class="subtitle__placeholder">说点什么吧…</template>
+                </div>
+              </div>
+            </div>
+            <!-- 2. Echo 正在思考 / 回复中 / 播报中 -->
+            <div
+              v-else-if="activeSubtitle === 'echo' && (pixelDialogue || chatStore.isStreaming || tts.isSpeaking.value)"
+              key="echo"
+              class="subtitle subtitle--echo"
+            >
+              <div class="subtitle__avatar subtitle__avatar--echo">E</div>
+              <div class="subtitle__bubble subtitle__bubble--echo">
+                <div class="subtitle__name">Echo</div>
+                <div class="subtitle__content">
+                  <span v-if="pixelDialogue" v-html="renderMarkdown(pixelDialogue)" />
+                  <span v-else-if="chatStore.isStreaming" class="subtitle__thinking">思考中…</span>
+                  <span v-else class="subtitle__placeholder">…</span>
+                </div>
+              </div>
+            </div>
+            <!-- 3. 兜底：没有内容时 -->
+            <div v-else key="placeholder" class="subtitle subtitle--placeholder">
+              <div class="subtitle__bubble subtitle__bubble--placeholder">
+                <div class="subtitle__name">Echo</div>
+                <div class="subtitle__content">{{ placeholderHint }}</div>
+              </div>
+            </div>
+          </transition>
+        </div>
+
+        <!-- 录音实时提示条 -->
+        <transition name="bubble-fade">
+          <div v-if="isListening" class="pixel-recording">
+            <span class="recording-dot" />
+            <span class="recording-label">正在聆听…</span>
+            <span v-if="displayInterim" class="recording-interim">{{ displayInterim }}</span>
+            <span v-else class="recording-interim recording-interim--placeholder">说点什么吧</span>
+            <button
+              class="recording-abort-btn"
+              type="button"
+              @click="handleAbort"
+              title="终止本次语音"
+            >
+              <el-icon><CircleClose /></el-icon>
+              <span>终止</span>
+            </button>
+          </div>
+        </transition>
+
+        <!-- 历史对话抽拉抽屉 -->
+        <transition name="drawer-fade">
+          <div v-if="historyOpen" class="history-mask" @click="toggleHistory" />
+        </transition>
+        <transition name="drawer-slide">
+          <aside v-if="historyOpen" class="history-drawer" role="dialog" aria-label="历史对话">
+            <div class="history-drawer__header">
+              <div class="history-drawer__title">
+                <el-icon><Document /></el-icon>
+                <span>历史对话</span>
+              </div>
+              <button class="history-drawer__close" @click="toggleHistory" title="关闭">
+                <el-icon><Close /></el-icon>
+              </button>
+            </div>
+            <div class="history-drawer__meta">
+              <span>共 {{ historyList.length }} 条</span>
+              <span v-if="historyList.length">最新：{{ historyList[historyList.length - 1].time }}</span>
+            </div>
+            <div class="history-drawer__list">
+              <div v-if="!historyList.length" class="history-drawer__empty">
+                <p>暂无对话记录</p>
+                <p class="history-drawer__hint">说一句试试看吧～</p>
+              </div>
+              <div
+                v-for="item in historyList"
+                v-else
+                :key="item.id"
+                class="history-item"
+                :class="`history-item--${item.role}`"
+              >
+                <div class="history-item__head">
+                  <span class="history-item__name">{{ item.role === 'user' ? '你' : 'Echo' }}</span>
+                  <span class="history-item__time">{{ item.time }}</span>
+                  <span v-if="item.source === 'voice'" class="history-item__tag">语音</span>
+                </div>
+                <div
+                  class="history-item__content"
+                  v-html="renderMarkdown(item.content)"
+                />
+              </div>
+            </div>
+          </aside>
+        </transition>
+      </div>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, nextTick, watch, onMounted, computed } from 'vue'
+import { ref, nextTick, watch, onMounted, computed, onBeforeUnmount } from 'vue'
 import {
   Plus,
   Close,
@@ -344,6 +546,7 @@ import {
   CircleClose,
   Headset,
   Mute,
+  Document,
 } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { useChatStore } from '@/stores/chat'
@@ -351,6 +554,9 @@ import type { ChatSession, Message } from '@/types/chat'
 import { sendChatMessageStream } from '@/api/chat'
 import { useSpeechRecognition } from '@/composables/useSpeechRecognition'
 import { useSpeechSynthesis } from '@/composables/useSpeechSynthesis'
+import PixelCharacter from '@/components/PixelCharacter.vue'
+import PixelScene from '@/components/PixelScene.vue'
+import { detectEmotion, EMOTION_LABELS, type Emotion } from '@/utils/emotion'
 
 const chatStore = useChatStore()
 const inputText = ref('')
@@ -362,6 +568,29 @@ const editingText = ref('')
 const sidebarCollapsed = ref(false)
 /** 标记下一条待发送消息的来源（语音 / 文本），handleSend 消费后重置为 text */
 const pendingSource = ref<'text' | 'voice'>('text')
+
+/* ---- 对话模式：文本 / 像素人物 ---- */
+type ChatMode = 'text' | 'pixel'
+const CHAT_MODE_KEY = 'chat_mode'
+function loadChatMode(): ChatMode {
+  try {
+    const v = localStorage.getItem(CHAT_MODE_KEY)
+    return v === 'pixel' ? 'pixel' : 'text'
+  } catch {
+    return 'text'
+  }
+}
+const chatMode = ref<ChatMode>(loadChatMode())
+/** 像素人物当前动作状态 */
+type PixelState = 'idle' | 'listen' | 'talk' | 'happy' | 'sad' | 'excited' | 'greet' | 'thinking'
+const pixelState = ref<PixelState>('idle')
+/** 最近一次识别到的情绪（用于提示标签） */
+const lastEmotion = ref<Emotion>('neutral')
+/** 当前是否有未结束的播报（控制像素人物张嘴） */
+const isPixelTalking = ref(false)
+/** 像素模式下的会话文本（用于气泡显示） */
+const pixelDialogue = ref<string>('')
+const pixelUserText = ref<string>('')
 
 /** 是否在流式响应结束后自动播报后端消息；持久化到 localStorage */
 const AUTO_PLAY_KEY = 'chat_auto_play'
@@ -441,8 +670,14 @@ const displayInterim = computed(() => {
 })
 
 /* ---- 语音播报（TTS） ---- */
+// 音色调成"甜美少女音"：
+//  - pitch 略升 → 听感更年轻软糯
+//  - rate 略放缓 → 减少机器感、咬字更清晰
+//  - 实际音色由 pickVoice 评分挑选（优先 Microsoft Xiaoxiao 等 Natural 神经合成女声）
 const tts = useSpeechSynthesis({
   lang: 'zh-CN',
+  pitch: 1.18,
+  rate: 0.96,
   onStart: () => {
     // onstart 内能拿到 speakingId（已在 speak() 之前设置好）
     console.info('[chat] tts started, id=%s', speakingId.value ?? '')
@@ -459,6 +694,94 @@ const tts = useSpeechSynthesis({
   },
 })
 
+/* ========================================================================
+ * 语音插话打断（barge-in）
+ *
+ * 需求：自动播放语音过程中，用户开口说话则立即打断当前 TTS；
+ *      等用户本句识别结束（handleSentence）后，再走正常发送流程
+ *      并播放新的 TTS 回复。
+ *
+ * 实现要点：
+ *  - TTS 开始时（autoPlay 或 像素自动语音）顺手拉起 mic 监听用户插话；
+ *  - 用 grace 期 + 最少字符阈值过滤掉麦克风对 TTS 自身的回声误判；
+ *  - 检测到真实插话后调用 tts.stop()，并打标 userIsInterrupting，
+ *    让 TTS 结束分支知道 mic 要继续保留等用户把话说完；
+ *  - 若 TTS 自然结束且无人插话，则视模式决定是否回收 mic（文本模式
+ *    无 autoListen 时主动关麦，避免长期占用麦克风权限）。
+ * ====================================================================== */
+
+/** 当前 mic 是否因 barge-in 需求而开启（用于 TTS 结束时判断要不要回收） */
+const bargeInArmed = ref(false)
+/** 是否检测到用户在 TTS 期间真正开口（区分"自然结束 vs 用户打断"） */
+const userIsInterrupting = ref(false)
+/** TTS 开始时间戳；用于宽限期判断（让浏览器 AEC 稳定） */
+let ttsStartedAt = 0
+/** TTS 开始后多少毫秒内忽略 interim，避免回声立刻误打断 */
+const BARGE_IN_GRACE_MS = 500
+/** 至少识别到多少字符才视为真正插话（过滤回声 / 单字噪声） */
+const BARGE_IN_MIN_LEN = 2
+
+/**
+ * 自动播报场景下，拉起 mic 监听用户插话。
+ * 仅当浏览器支持 STT、当前未在录音、且自动播报相关开关已打开时启动。
+ */
+function startBargeInListening() {
+  if (!speech.isSupported.value) return
+  if (isListening.value) return
+  const wantBargeIn =
+    autoPlay.value || (chatMode.value === 'pixel' && pixelAutoListen.value)
+  if (!wantBargeIn) return
+  bargeInArmed.value = true
+  userIsInterrupting.value = false
+  // reset 一下让 grace 期内潜在的回声片段不会污染下一句
+  speech.reset()
+  speech.start()
+  console.info('[chat] barge-in mic armed')
+}
+
+/** TTS 状态变化：开始时拉起 mic；结束时按"是否被打断"分别清理 */
+watch(tts.isSpeaking, (speaking, prev) => {
+  if (speaking && !prev) {
+    ttsStartedAt = Date.now()
+    userIsInterrupting.value = false
+    startBargeInListening()
+    return
+  }
+  if (!speaking && prev && bargeInArmed.value) {
+    bargeInArmed.value = false
+    if (userIsInterrupting.value) {
+      // 用户已开口，mic 必须保持开启等 handleSentence 接管
+      console.info('[chat] barge-in active, keep mic for user sentence')
+      return
+    }
+    // TTS 自然结束且无人插话：像素模式 autoListen 时由原有 watcher 保留 mic；
+    // 文本模式则主动关麦避免空转
+    const keepMic =
+      chatMode.value === 'pixel' && pixelAutoListen.value
+    if (!keepMic && isListening.value) {
+      console.info('[chat] tts ended without barge-in, stop mic')
+      speech.stop()
+    }
+    userIsInterrupting.value = false
+  }
+})
+
+/** 用户在 TTS 播报期间开口 → 立即打断（grace 期 + 阈值过滤） */
+watch(
+  () => displayInterim.value,
+  (text) => {
+    if (!tts.isSpeaking.value) return
+    if (Date.now() - ttsStartedAt < BARGE_IN_GRACE_MS) return
+    const trimmed = text.trim()
+    if (trimmed.length < BARGE_IN_MIN_LEN) return
+    if (userIsInterrupting.value) return
+    userIsInterrupting.value = true
+    console.info('[chat] barge-in detected, interim="%s" → stop TTS', trimmed)
+    tts.stop()
+    speakingId.value = null
+  },
+)
+
 /** 持久化 autoPlay 状态：变更时写 localStorage；关闭时立即停播 */
 watch(autoPlay, (v) => {
   try {
@@ -466,10 +789,15 @@ watch(autoPlay, (v) => {
   } catch {
     /* ignore */
   }
-  // 用户主动关闭时，立刻停掉正在播放的语音
+  // 用户主动关闭时，立刻停掉正在播放的语音并撤掉 barge-in mic
   if (!v) {
     tts.stop()
     speakingId.value = null
+    if (bargeInArmed.value && isListening.value) {
+      // barge-in 拉起的 mic 也一并关掉，避免后台空转
+      speech.stop()
+    }
+    bargeInArmed.value = false
   }
 })
 
@@ -542,6 +870,7 @@ function handleTogglePlay(msg: Message) {
  * - 仅当用户原本就开着录音（shouldResumeListening=true）才恢复
  * - 当前不在听写中才启动（防止多次 stop/start 竞态）
  * - 若还在流式响应中则推迟到 done 回调
+ * - 若 mic 已被 barge-in 拉起在听，直接放过，避免 reset() 抹掉用户当前的句子
  */
 function resumeListeningIfNeeded() {
   if (!shouldResumeListening.value) return
@@ -551,6 +880,8 @@ function resumeListeningIfNeeded() {
     return
   }
   shouldResumeListening.value = false
+  // 关键：若 barge-in 期间 mic 已在监听用户插话，绝不能 reset，否则会把刚刚识别到的半句话清空
+  if (isListening.value) return
   // 用 nextTick 把"恢复动作"放到所有状态更新之后，避免和 TTS 抢资源
   nextTick(() => {
     speech.reset()
@@ -562,9 +893,17 @@ onMounted(() => {
   chatStore.initDefaultSession()
   // 部分浏览器（Chromium 系）首次调用前 getVoices 列表为空，
   // 在这里注册一次 voiceschanged 以便后续 pickVoice 能拿到中文音色。
+  // 同时把 zh 候选名单打印出来，方便确认是否选到了想要的甜美少女音。
   if ('speechSynthesis' in window) {
     window.speechSynthesis.onvoiceschanged = () => {
-      console.info('[tts] voices loaded: %d', window.speechSynthesis.getVoices().length)
+      const all = window.speechSynthesis.getVoices()
+      const zh = all.filter((v) => v.lang?.toLowerCase().startsWith('zh'))
+      console.info(
+        '[tts] voices loaded: total=%d, zh-candidates=%d → %s',
+        all.length,
+        zh.length,
+        zh.map((v) => v.name).join(' | ') || '(none)',
+      )
     }
   }
 })
@@ -700,7 +1039,12 @@ async function handleSend() {
       chatStore.isStreaming = false
       abortController = null
       // 流式完成：若开启了自动播报，朗读最后一条 assistant 消息
-      if (autoPlay.value && lastMsg && lastMsg.content.trim()) {
+      // 像素人物模式下只要开启了自动语音对话就强制播报
+      const shouldSpeak =
+        (autoPlay.value || (chatMode.value === 'pixel' && pixelAutoListen.value)) &&
+        lastMsg &&
+        lastMsg.content.trim()
+      if (shouldSpeak) {
         speakingId.value = lastMsg.id
         tts.speak(lastMsg.content)
       } else {
@@ -798,6 +1142,326 @@ watch(
     await scrollToBottom()
   },
 )
+
+/* ========================================================================
+ * 像素人物模式（额外逻辑）
+ * ====================================================================== */
+
+/** 像素模式是否处于"自动开启录音"的状态 */
+const pixelAutoListen = ref(false)
+/** 历史对话抽屉是否打开 */
+const historyOpen = ref(false)
+/** 字幕区当前应该展示谁的台词：user | echo | placeholder */
+type SubtitleSpeaker = 'user' | 'echo' | 'placeholder'
+const activeSubtitle = ref<SubtitleSpeaker>('placeholder')
+
+/** 角色尺寸：根据视口高度自适应 */
+const characterSize = computed(() => {
+  // 取窗口高度的 0.45-0.6 之间作为角色高度上限，再换算成宽度
+  const h = typeof window !== 'undefined' ? window.innerHeight : 800
+  return Math.max(180, Math.min(360, Math.round(h * 0.5)))
+})
+
+/** 格式化时间戳 HH:MM */
+function formatTime(ts: number): string {
+  const d = new Date(ts)
+  const pad = (n: number) => n.toString().padStart(2, '0')
+  return `${pad(d.getHours())}:${pad(d.getMinutes())}`
+}
+
+/** 历史对话列表（派生自当前会话的消息） */
+const historyList = computed(() => {
+  const s = chatStore.currentSession
+  if (!s) return []
+  return s.messages
+    .filter((m) => m.content && m.content.trim())
+    .map((m) => ({
+      id: m.id,
+      role: m.role,
+      content: m.content,
+      source: m.source,
+      time: formatTime(m.createdAt),
+    }))
+})
+
+/** 切换历史抽屉 */
+function toggleHistory() {
+  historyOpen.value = !historyOpen.value
+  console.info('[chat] history drawer -> %s', historyOpen.value ? 'open' : 'closed')
+}
+
+/** 决定当前字幕区应该显示哪一方 */
+function decideSubtitle(): SubtitleSpeaker {
+  if (chatStore.isStreaming || isPixelTalking.value) return 'echo'
+  if (isListening.value || displayInterim.value) return 'user'
+  // 用户刚发了消息但 Echo 还没开始回复
+  if (pixelUserText.value && !pixelDialogue.value) return 'user'
+  return 'placeholder'
+}
+
+watch(
+  [() => chatStore.isStreaming, tts.isSpeaking, isListening, displayInterim, pixelUserText, pixelDialogue],
+  () => {
+    activeSubtitle.value = decideSubtitle()
+  },
+  { immediate: true },
+)
+
+/** 切换对话模式 */
+function handleSwitchMode(mode: ChatMode) {
+  if (chatMode.value === mode) return
+  chatMode.value = mode
+  try {
+    localStorage.setItem(CHAT_MODE_KEY, mode)
+  } catch {
+    /* ignore */
+  }
+  console.info('[chat] switch mode -> %s', mode)
+  // 切到像素模式：自动开启语音监听；切回文本模式：关闭
+  // 监听 chatMode 的 watcher (immediate) 会负责启停，这里只需兜底
+  if (mode === 'text') {
+    stopPixelAutoListen()
+  }
+}
+
+/** 像素模式：开启自动语音监听 */
+function startPixelAutoListen() {
+  if (!speech.isSupported.value) {
+    ElMessage.warning('当前浏览器不支持语音识别')
+    return
+  }
+  if (isListening.value) return
+  pixelAutoListen.value = true
+  speech.reset()
+  speech.start()
+  pixelState.value = 'listen'
+  console.info('[pixel] auto voice listening started')
+}
+
+/** 像素模式：关闭自动语音监听 */
+function stopPixelAutoListen() {
+  pixelAutoListen.value = false
+  if (isListening.value) speech.stop()
+  if (pixelState.value === 'listen' || pixelState.value === 'idle') {
+    pixelState.value = 'idle'
+  }
+  console.info('[pixel] auto voice listening stopped')
+}
+
+/**
+ * 把情绪转换成像素人物的状态。
+ * 规则：兴奋→excited；开心→happy；悲伤→sad；其余→talk。
+ * 同时把状态推送给 UI 标签。
+ */
+function applyEmotionToPixel(text: string) {
+  const emotion = detectEmotion(text)
+  lastEmotion.value = emotion
+  switch (emotion) {
+    case 'excited':
+      pixelState.value = 'excited'
+      break
+    case 'happy':
+      pixelState.value = 'happy'
+      break
+    case 'sad':
+      pixelState.value = 'sad'
+      break
+    case 'angry':
+      pixelState.value = 'sad'
+      break
+    default:
+      pixelState.value = 'talk'
+  }
+  console.info('[pixel] emotion=%s, state=%s', emotion, pixelState.value)
+}
+
+/**
+ * 像素模式：流式响应期间，把累积到的文本投影到气泡上
+ */
+watch(
+  () => {
+    const s = chatStore.currentSession
+    if (!s) return ''
+    const last = s.messages[s.messages.length - 1]
+    return last?.role === 'assistant' ? last.content : ''
+  },
+  (v) => {
+    if (chatMode.value === 'pixel') pixelDialogue.value = v
+  },
+)
+
+/**
+ * 像素模式：监听 TTS 状态。
+ * - TTS 朗读中：像素人物进入 talk 状态 + 嘴巴开合
+ * - TTS 结束后：进入 idle（如果开了 autoListen 则恢复录音）
+ */
+watch(tts.isSpeaking, (v) => {
+  if (chatMode.value !== 'pixel') return
+  isPixelTalking.value = v
+  if (v) {
+    // 朗读中维持 talk 状态（情绪化由 applyEmotionToPixel 已设）
+    if (pixelState.value !== 'happy' && pixelState.value !== 'excited' && pixelState.value !== 'sad') {
+      pixelState.value = 'talk'
+    }
+  } else {
+    // 朗读结束：恢复 idle / 重新开启录音
+    if (pixelAutoListen.value && !chatStore.isStreaming) {
+      nextTick(() => {
+        if (!isListening.value) {
+          speech.reset()
+          speech.start()
+        }
+        pixelState.value = 'listen'
+      })
+    } else {
+      pixelState.value = 'idle'
+    }
+  }
+})
+
+/** 像素模式：监听识别状态，决定是否显示"倾听中" */
+watch(isListening, (v) => {
+  if (chatMode.value !== 'pixel') return
+  if (v) {
+    if (pixelState.value !== 'happy' && pixelState.value !== 'excited' && pixelState.value !== 'sad' && pixelState.value !== 'talk') {
+      pixelState.value = 'listen'
+    }
+  } else {
+    // 录音停：进入 idle，但 keep autoListen 意图
+    if (pixelState.value === 'listen') pixelState.value = 'idle'
+  }
+})
+
+/** 像素模式：监听流式状态，开始时进入 thinking（眼睛朝下看） */
+watch(
+  () => chatStore.isStreaming,
+  (v) => {
+    if (chatMode.value !== 'pixel') return
+    if (v) {
+      // 流式中：如果是 talk 状态说明在播报；否则显示思考中
+      if (!tts.isSpeaking.value) pixelState.value = 'thinking'
+    } else {
+      // 流式结束：handleSend 内部已设置播报，由 tts.isSpeaking watcher 接管
+      // 不主动重置
+    }
+  },
+)
+
+/** 像素模式进入后，自动开启录音（首屏时） */
+watch(
+  chatMode,
+  (v) => {
+    if (v === 'pixel') {
+      nextTick(() => {
+        // 等组件挂载好再启动
+        if (!isListening.value) startPixelAutoListen()
+      })
+    }
+  },
+  { immediate: true },
+)
+
+onBeforeUnmount(() => {
+  stopPixelAutoListen()
+  tts.stop()
+  if (isListening.value) speech.stop()
+})
+
+/**
+ * 覆盖 handleSend 中的播报分支：流式结束后在像素模式下自动播报并应用情绪
+ * （保持原文本模式行为不变：autoPlay 开 → TTS 播报）
+ *
+ * 关键点：原 handleSend 的 onDone 回调只判断 autoPlay。
+ * 在像素模式下我们强制播报（pixelAutoListen 必然要求听到对方回复），
+ * 同时通过 applyEmotionToPixel 设置像素人物的状态。
+ */
+// 通过 watch 拦截流式完成的"播报"分支：原 onDone 在 autoPlay=true 时调 tts.speak，
+// 我们在这里加 emotion 应用。简单做法：覆写 tts.speak 的回调时机。
+watch(
+  () => tts.isSpeaking.value,
+  (v) => {
+    if (!v) return
+    // TTS 开始时立即识别情绪
+    const s = chatStore.currentSession
+    if (!s) return
+    const last = s.messages[s.messages.length - 1]
+    if (last && last.role === 'assistant' && last.content.trim()) {
+      applyEmotionToPixel(last.content)
+    }
+  },
+)
+
+/** 同步最近一条 user 消息到 pixelUserText，用于气泡显示 */
+watch(
+  () => {
+    const s = chatStore.currentSession
+    if (!s) return null
+    // 倒序查找最后一条 user 消息
+    for (let i = s.messages.length - 1; i >= 0; i--) {
+      if (s.messages[i].role === 'user') return s.messages[i]
+    }
+    return null
+  },
+  (msg) => {
+    if (!msg) {
+      pixelUserText.value = ''
+      return
+    }
+    pixelUserText.value = msg.content
+  },
+  { immediate: true },
+)
+
+/** 像素模式：手动停止当前播报 */
+function handlePixelStopSpeak() {
+  tts.stop()
+  pixelState.value = 'idle'
+  if (pixelAutoListen.value) {
+    nextTick(() => {
+      if (!isListening.value) {
+        speech.reset()
+        speech.start()
+      }
+    })
+  }
+}
+
+/* ---- 像素模式 UI 文案 ---- */
+const pixelStateLabel = computed(() => {
+  switch (pixelState.value) {
+    case 'idle':
+      return '待机'
+    case 'listen':
+      return '聆听中'
+    case 'talk':
+      return '回复中'
+    case 'happy':
+      return '开心'
+    case 'sad':
+      return '低落'
+    case 'excited':
+      return '兴奋'
+    case 'greet':
+      return '打招呼'
+    case 'thinking':
+      return '思考中'
+    default:
+      return '待机'
+  }
+})
+
+const pixelHint = computed(() => {
+  if (chatStore.isStreaming && !tts.isSpeaking.value) return 'Echo 正在思考…'
+  if (isPixelTalking.value) return 'Echo 正在说话…'
+  if (isListening.value) return '正在聆听… 说完自动发送'
+  if (pixelAutoListen.value) return '语音对话已开启 · 说话即可'
+  return '点击「语音开」开启语音对话'
+})
+
+const placeholderHint = computed(() => {
+  if (!speech.isSupported.value) return '当前浏览器不支持语音识别，请使用键盘输入。'
+  return '嗨～我是 Echo，说点什么试试看？'
+})
 </script>
 
 <style scoped>
@@ -849,6 +1513,54 @@ watch(
 
 .new-chat-btn:hover {
   background: #3a7aff;
+}
+
+/* 模式切换器（文本 / 像素） */
+.mode-switcher {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.4rem;
+  margin-top: 0.6rem;
+  padding: 0.3rem;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 0.6rem;
+}
+
+.mode-switcher__btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.3rem;
+  padding: 0.4rem 0.5rem;
+  border-radius: 0.45rem;
+  border: none;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.55);
+  font-size: clamp(0.72rem, 0.85vw, 0.8rem);
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.mode-switcher__btn:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.85);
+}
+
+.mode-switcher__btn--active {
+  background: linear-gradient(135deg, rgba(22, 93, 255, 0.85), rgba(91, 141, 239, 0.85));
+  color: #fff;
+  box-shadow: 0 0.25rem 0.6rem rgba(22, 93, 255, 0.35);
+}
+
+.mode-switcher__btn--active:hover {
+  background: linear-gradient(135deg, #3a7aff, #5b8def);
+  color: #fff;
+}
+
+.mode-switcher__btn .el-icon {
+  font-size: 0.95rem;
 }
 
 .sessions-list {
@@ -1713,5 +2425,859 @@ watch(
   white-space: pre-wrap;
   word-break: break-word;
   box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.05);
+}
+
+/* ===================== 像素人物模式（全屏重做版） ===================== */
+.chat-mode {
+  display: contents;
+}
+
+.chat-mode--pixel {
+  position: relative;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  min-height: 0;
+}
+
+/* 全屏背景：场景组件 absolute 覆盖 */
+.pixel-mode__scene {
+  position: absolute !important;
+  inset: 0;
+  z-index: 0;
+}
+
+/* 顶部浮动条 */
+.pixel-topbar {
+  position: relative;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+  padding: clamp(0.6rem, 1.2vw, 0.9rem) clamp(0.85rem, 1.8vw, 1.4rem);
+  flex-shrink: 0;
+}
+
+.pixel-state-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.4rem 0.85rem;
+  border-radius: 1rem;
+  background: rgba(0, 0, 0, 0.4);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  font-size: clamp(0.72rem, 0.85vw, 0.8rem);
+  color: rgba(255, 255, 255, 0.92);
+  font-weight: 500;
+  box-shadow: 0 0.4rem 1rem rgba(0, 0, 0, 0.25);
+}
+
+.pixel-state-chip__dot {
+  width: 0.55rem;
+  height: 0.55rem;
+  border-radius: 50%;
+  background: #5a5a6a;
+  box-shadow: 0 0 0.4rem currentColor;
+}
+
+.pixel-state-chip__dot--listen {
+  background: #ff5577;
+  color: #ff5577;
+  animation: pixel-dot-pulse 1.2s ease-in-out infinite;
+}
+.pixel-state-chip__dot--talk {
+  background: #5b8def;
+  color: #5b8def;
+  animation: pixel-dot-pulse 0.7s ease-in-out infinite;
+}
+.pixel-state-chip__dot--happy,
+.pixel-state-chip__dot--excited {
+  background: #ffb347;
+  color: #ffb347;
+}
+.pixel-state-chip__dot--sad {
+  background: #9aa3c0;
+  color: #9aa3c0;
+}
+.pixel-state-chip__dot--thinking {
+  background: #a78bfa;
+  color: #a78bfa;
+  animation: pixel-dot-pulse 1.5s ease-in-out infinite;
+}
+.pixel-state-chip__dot--greet {
+  background: #4ade80;
+  color: #4ade80;
+}
+.pixel-state-chip__dot--idle {
+  background: #5a5a6a;
+  color: #5a5a6a;
+}
+
+@keyframes pixel-dot-pulse {
+  0%,
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+  50% {
+    transform: scale(1.4);
+    opacity: 0.6;
+  }
+}
+
+.pixel-topbar__actions {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.pixel-mini-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.4rem 0.7rem;
+  border-radius: 0.6rem;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  background: rgba(0, 0, 0, 0.4);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  color: rgba(255, 255, 255, 0.7);
+  font-size: clamp(0.7rem, 0.85vw, 0.8rem);
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.pixel-mini-btn:hover {
+  background: rgba(0, 0, 0, 0.6);
+  color: #fff;
+  border-color: rgba(255, 255, 255, 0.35);
+}
+
+.pixel-mini-btn--on {
+  background: rgba(22, 93, 255, 0.35);
+  border-color: rgba(22, 93, 255, 0.6);
+  color: #d6e4ff;
+}
+
+.pixel-mini-btn--on:hover {
+  background: rgba(22, 93, 255, 0.5);
+  color: #fff;
+}
+
+.pixel-mini-btn--danger {
+  background: rgba(245, 63, 63, 0.3);
+  border-color: rgba(245, 63, 63, 0.6);
+  color: #ffd5d5;
+  animation: mic-pulse 1.4s ease-in-out infinite;
+}
+
+.pixel-mini-btn .el-icon {
+  font-size: 0.95rem;
+}
+
+/* 角色居中区 */
+.pixel-mode__character-wrap {
+  position: relative;
+  z-index: 1;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 0;
+  gap: 0.4rem;
+  padding: 0.5rem;
+}
+
+.pixel-mode__character {
+  filter: drop-shadow(0 1rem 2rem rgba(0, 0, 0, 0.45));
+  max-height: 100%;
+  max-width: 100%;
+}
+
+.pixel-mode__hint {
+  font-size: clamp(0.78rem, 0.95vw, 0.9rem);
+  color: rgba(255, 255, 255, 0.85);
+  text-align: center;
+  padding: 0.35rem 0.8rem;
+  border-radius: 1rem;
+  background: rgba(0, 0, 0, 0.35);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  line-height: 1.5;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
+}
+
+/* 字幕区（对白气泡） */
+.pixel-mode__dialogue {
+  position: relative;
+  z-index: 2;
+  flex-shrink: 0;
+  min-height: clamp(5rem, 12vh, 8rem);
+  padding: 0 clamp(0.85rem, 1.8vw, 1.4rem) clamp(0.5rem, 1vw, 0.8rem);
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+}
+
+.subtitle {
+  display: flex;
+  align-items: flex-end;
+  gap: 0.5rem;
+  max-width: min(48rem, 95%);
+  width: 100%;
+}
+
+.subtitle--user {
+  justify-content: flex-start;
+}
+
+.subtitle--echo {
+  justify-content: flex-end;
+  flex-direction: row-reverse;
+}
+
+.subtitle--placeholder {
+  justify-content: center;
+}
+
+.subtitle__avatar {
+  width: 2rem;
+  height: 2rem;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.85rem;
+  font-weight: 600;
+  background: linear-gradient(135deg, #5b8def, #165dff);
+  color: #fff;
+  flex-shrink: 0;
+  box-shadow: 0 0.25rem 0.5rem rgba(0, 0, 0, 0.3);
+}
+
+.subtitle__avatar--echo {
+  background: linear-gradient(135deg, #ff8db5, #d9667c);
+}
+
+.subtitle__bubble {
+  padding: 0.55rem 0.85rem;
+  border-radius: 0.8rem;
+  background: rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  color: rgba(255, 255, 255, 0.95);
+  font-size: clamp(0.85rem, 1.05vw, 0.98rem);
+  line-height: 1.5;
+  min-width: 5rem;
+  max-width: 100%;
+  box-shadow: 0 0.4rem 1rem rgba(0, 0, 0, 0.35);
+  position: relative;
+}
+
+.subtitle--user .subtitle__bubble {
+  border-bottom-left-radius: 0.25rem;
+  background: linear-gradient(135deg, rgba(22, 93, 255, 0.85), rgba(91, 141, 239, 0.85));
+}
+
+.subtitle--echo .subtitle__bubble--echo {
+  border-bottom-right-radius: 0.25rem;
+  background: linear-gradient(135deg, rgba(217, 102, 124, 0.85), rgba(255, 141, 181, 0.85));
+}
+
+.subtitle--placeholder .subtitle__bubble--placeholder {
+  background: rgba(0, 0, 0, 0.3);
+  border: 1px dashed rgba(255, 255, 255, 0.2);
+  text-align: center;
+  font-style: italic;
+  color: rgba(255, 255, 255, 0.7);
+}
+
+.subtitle__name {
+  font-size: clamp(0.65rem, 0.75vw, 0.7rem);
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  opacity: 0.75;
+  margin-bottom: 0.15rem;
+}
+
+.subtitle--user .subtitle__name {
+  text-align: left;
+}
+
+.subtitle--echo .subtitle__name {
+  text-align: right;
+}
+
+.subtitle__content {
+  word-break: break-word;
+  white-space: pre-wrap;
+}
+
+.subtitle__content :deep(code) {
+  background: rgba(0, 0, 0, 0.3);
+  padding: 0.05rem 0.3rem;
+  border-radius: 0.25rem;
+  font-size: 0.92em;
+  font-family: monospace;
+}
+
+.subtitle__content :deep(pre) {
+  background: rgba(0, 0, 0, 0.4);
+  padding: 0.5rem 0.7rem;
+  border-radius: 0.4rem;
+  overflow-x: auto;
+  margin: 0.4rem 0;
+}
+
+.subtitle__placeholder {
+  color: rgba(255, 255, 255, 0.55);
+  font-style: italic;
+}
+
+.subtitle__thinking {
+  color: rgba(255, 255, 255, 0.8);
+  font-style: italic;
+  animation: subtitle-thinking 1.2s ease-in-out infinite;
+}
+
+@keyframes subtitle-thinking {
+  0%,
+  100% {
+    opacity: 0.5;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+/* 字幕切换动画 */
+.subtitle-fade-enter-active,
+.subtitle-fade-leave-active {
+  transition: opacity 0.25s ease, transform 0.25s ease;
+}
+.subtitle-fade-enter-from {
+  opacity: 0;
+  transform: translateY(0.6rem);
+}
+.subtitle-fade-leave-to {
+  opacity: 0;
+  transform: translateY(-0.4rem);
+}
+
+/* 录音提示条 */
+.pixel-recording {
+  position: absolute;
+  z-index: 4;
+  left: 50%;
+  bottom: clamp(5.5rem, 11vh, 7rem);
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.55rem 0.85rem;
+  border-radius: 0.7rem;
+  background: rgba(245, 63, 63, 0.18);
+  border: 1px solid rgba(245, 63, 63, 0.5);
+  color: rgba(255, 255, 255, 0.92);
+  font-size: clamp(0.78rem, 0.95vw, 0.9rem);
+  max-width: min(40rem, 90%);
+  overflow: hidden;
+  box-shadow: 0 0.4rem 1rem rgba(0, 0, 0, 0.3);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+}
+
+/* ====== 历史抽屉 ====== */
+.history-mask {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.4);
+  z-index: 9;
+  backdrop-filter: blur(2px);
+  -webkit-backdrop-filter: blur(2px);
+}
+
+.history-drawer {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: min(28rem, 90%);
+  z-index: 10;
+  background: linear-gradient(180deg, #1a1a26 0%, #14141d 100%);
+  border-left: 1px solid rgba(255, 255, 255, 0.1);
+  box-shadow: -0.5rem 0 2rem rgba(0, 0, 0, 0.4);
+  display: flex;
+  flex-direction: column;
+  color: #fff;
+}
+
+.history-drawer__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.85rem 1rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  flex-shrink: 0;
+}
+
+.history-drawer__title {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.95rem;
+  font-weight: 600;
+}
+
+.history-drawer__title .el-icon {
+  font-size: 1.05rem;
+  color: #5b8def;
+}
+
+.history-drawer__close {
+  width: 1.85rem;
+  height: 1.85rem;
+  border-radius: 0.4rem;
+  border: none;
+  background: rgba(255, 255, 255, 0.06);
+  color: rgba(255, 255, 255, 0.7);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s;
+}
+
+.history-drawer__close:hover {
+  background: rgba(255, 255, 255, 0.12);
+  color: #fff;
+}
+
+.history-drawer__meta {
+  display: flex;
+  justify-content: space-between;
+  padding: 0.6rem 1rem;
+  font-size: 0.75rem;
+  color: rgba(255, 255, 255, 0.55);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+  flex-shrink: 0;
+}
+
+.history-drawer__list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0.6rem 1rem 1.2rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.history-drawer__empty {
+  text-align: center;
+  color: rgba(255, 255, 255, 0.45);
+  padding: 2.5rem 1rem;
+  font-size: 0.85rem;
+}
+
+.history-drawer__empty p {
+  margin: 0.2rem 0;
+}
+
+.history-drawer__hint {
+  font-size: 0.75rem;
+  color: rgba(255, 255, 255, 0.3);
+}
+
+.history-item {
+  padding: 0.6rem 0.75rem;
+  border-radius: 0.6rem;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.history-item--user {
+  background: rgba(22, 93, 255, 0.1);
+  border-color: rgba(22, 93, 255, 0.25);
+}
+
+.history-item--assistant {
+  background: rgba(217, 102, 124, 0.08);
+  border-color: rgba(217, 102, 124, 0.2);
+}
+
+.history-item__head {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin-bottom: 0.3rem;
+  font-size: 0.72rem;
+  color: rgba(255, 255, 255, 0.6);
+}
+
+.history-item__name {
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.85);
+}
+
+.history-item__time {
+  color: rgba(255, 255, 255, 0.4);
+  font-family: monospace;
+  font-size: 0.7rem;
+}
+
+.history-item__tag {
+  font-size: 0.65rem;
+  padding: 0.05rem 0.35rem;
+  border-radius: 0.3rem;
+  background: rgba(91, 141, 239, 0.2);
+  color: #a9c3ff;
+}
+
+.history-item__content {
+  font-size: 0.85rem;
+  line-height: 1.6;
+  color: rgba(255, 255, 255, 0.92);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.history-item__content :deep(code) {
+  background: rgba(0, 0, 0, 0.3);
+  padding: 0.05rem 0.3rem;
+  border-radius: 0.25rem;
+  font-size: 0.9em;
+  font-family: monospace;
+}
+
+.history-item__content :deep(pre) {
+  background: rgba(0, 0, 0, 0.4);
+  padding: 0.5rem 0.7rem;
+  border-radius: 0.4rem;
+  overflow-x: auto;
+  margin: 0.4rem 0;
+}
+
+/* 抽屉滑入/淡入动画 */
+.drawer-fade-enter-active,
+.drawer-fade-leave-active {
+  transition: opacity 0.3s ease;
+}
+.drawer-fade-enter-from,
+.drawer-fade-leave-to {
+  opacity: 0;
+}
+
+.drawer-slide-enter-active,
+.drawer-slide-leave-active {
+  transition: transform 0.3s cubic-bezier(0.22, 1, 0.36, 1);
+}
+.drawer-slide-enter-from,
+.drawer-slide-leave-to {
+  transform: translateX(100%);
+}
+
+/* ====== 旧版兼容样式（保留以防引用） ====== */
+.pixel-stage {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  padding: clamp(0.75rem, 1.6vw, 1.25rem) clamp(0.85rem, 1.8vw, 1.5rem);
+  gap: 0.75rem;
+  background: radial-gradient(ellipse at top, #1f2540 0%, #14141d 60%, #0f0f17 100%);
+  overflow: hidden;
+}
+
+.pixel-topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+}
+
+.pixel-state-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.35rem 0.7rem;
+  border-radius: 1rem;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  font-size: clamp(0.7rem, 0.85vw, 0.8rem);
+  color: rgba(255, 255, 255, 0.85);
+  font-weight: 500;
+}
+
+.pixel-state-chip__dot {
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 50%;
+  background: #5a5a6a;
+  box-shadow: 0 0 0.4rem currentColor;
+}
+
+.pixel-state-chip__dot--listen {
+  background: #ff5577;
+  color: #ff5577;
+  animation: pixel-dot-pulse 1.2s ease-in-out infinite;
+}
+.pixel-state-chip__dot--talk {
+  background: #5b8def;
+  color: #5b8def;
+  animation: pixel-dot-pulse 0.7s ease-in-out infinite;
+}
+.pixel-state-chip__dot--happy,
+.pixel-state-chip__dot--excited {
+  background: #ffb347;
+  color: #ffb347;
+}
+.pixel-state-chip__dot--sad {
+  background: #9aa3c0;
+  color: #9aa3c0;
+}
+.pixel-state-chip__dot--thinking {
+  background: #a78bfa;
+  color: #a78bfa;
+  animation: pixel-dot-pulse 1.5s ease-in-out infinite;
+}
+.pixel-state-chip__dot--greet {
+  background: #4ade80;
+  color: #4ade80;
+}
+.pixel-state-chip__dot--idle {
+  background: #5a5a6a;
+  color: #5a5a6a;
+}
+
+@keyframes pixel-dot-pulse {
+  0%,
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+  50% {
+    transform: scale(1.4);
+    opacity: 0.6;
+  }
+}
+
+.pixel-topbar__actions {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.pixel-mini-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.35rem 0.6rem;
+  border-radius: 0.5rem;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  background: rgba(255, 255, 255, 0.04);
+  color: rgba(255, 255, 255, 0.6);
+  font-size: clamp(0.7rem, 0.85vw, 0.78rem);
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.pixel-mini-btn:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: #fff;
+}
+
+.pixel-mini-btn--on {
+  background: rgba(22, 93, 255, 0.18);
+  border-color: rgba(22, 93, 255, 0.5);
+  color: #a9c3ff;
+}
+
+.pixel-mini-btn--on:hover {
+  background: rgba(22, 93, 255, 0.3);
+  color: #fff;
+}
+
+.pixel-mini-btn--danger {
+  background: rgba(245, 63, 63, 0.18);
+  border-color: rgba(245, 63, 63, 0.5);
+  color: #ffb3b3;
+  animation: mic-pulse 1.4s ease-in-out infinite;
+}
+
+.pixel-mini-btn .el-icon {
+  font-size: 0.95rem;
+}
+
+.pixel-stage__main {
+  flex: 1;
+  display: grid;
+  grid-template-columns: minmax(12rem, 18rem) 1fr;
+  gap: clamp(0.85rem, 1.8vw, 1.5rem);
+  align-items: stretch;
+  min-height: 0;
+}
+
+@media (max-width: 56rem) {
+  .pixel-stage__main {
+    grid-template-columns: 1fr;
+  }
+}
+
+.pixel-stage__character {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.6rem;
+  padding: 1rem 0.5rem;
+  background: linear-gradient(180deg, rgba(91, 141, 239, 0.1) 0%, rgba(91, 141, 239, 0.02) 100%);
+  border: 1px solid rgba(91, 141, 239, 0.18);
+  border-radius: 1rem;
+  position: relative;
+  overflow: hidden;
+}
+
+/* 角色背后柔和光晕 */
+.pixel-stage__character::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(circle at 50% 60%, rgba(91, 141, 239, 0.2) 0%, transparent 60%);
+  pointer-events: none;
+}
+
+.pixel-character--stage {
+  position: relative;
+  z-index: 1;
+  filter: drop-shadow(0 0.5rem 1rem rgba(0, 0, 0, 0.4));
+}
+
+.pixel-stage__hint {
+  position: relative;
+  z-index: 1;
+  font-size: clamp(0.75rem, 0.95vw, 0.85rem);
+  color: rgba(255, 255, 255, 0.7);
+  text-align: center;
+  padding: 0 0.5rem;
+  line-height: 1.5;
+}
+
+.pixel-stage__bubbles {
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+  overflow-y: auto;
+  padding: 0.4rem 0.4rem 0.4rem 0.2rem;
+  min-height: 0;
+}
+
+.bubble {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  padding: 0.7rem 0.9rem;
+  border-radius: 0.8rem;
+  max-width: 90%;
+  font-size: clamp(0.82rem, 1vw, 0.95rem);
+  line-height: 1.6;
+  position: relative;
+  word-break: break-word;
+  box-shadow: 0 0.4rem 1rem rgba(0, 0, 0, 0.25);
+}
+
+.bubble--user {
+  align-self: flex-end;
+  background: linear-gradient(135deg, #165dff, #3a7aff);
+  color: #fff;
+  border-bottom-right-radius: 0.25rem;
+}
+
+.bubble--assistant {
+  align-self: flex-start;
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.92);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-bottom-left-radius: 0.25rem;
+}
+
+.bubble--placeholder {
+  align-self: center;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px dashed rgba(255, 255, 255, 0.12);
+  color: rgba(255, 255, 255, 0.55);
+  text-align: center;
+  font-style: italic;
+  font-size: clamp(0.8rem, 0.95vw, 0.9rem);
+  padding: 1rem 1.2rem;
+}
+
+.bubble--streaming {
+  background: rgba(91, 141, 239, 0.1);
+  border-color: rgba(91, 141, 239, 0.3);
+  color: rgba(255, 255, 255, 0.7);
+}
+
+.bubble__label {
+  font-size: clamp(0.65rem, 0.8vw, 0.72rem);
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  opacity: 0.7;
+  text-transform: uppercase;
+}
+
+.bubble--user .bubble__label {
+  text-align: right;
+}
+
+.bubble__content {
+  white-space: pre-wrap;
+}
+
+.bubble__content :deep(code) {
+  background: rgba(0, 0, 0, 0.3);
+  padding: 0.05rem 0.3rem;
+  border-radius: 0.25rem;
+  font-size: 0.92em;
+  font-family: monospace;
+}
+
+.bubble__content :deep(pre) {
+  background: rgba(0, 0, 0, 0.4);
+  padding: 0.5rem 0.7rem;
+  border-radius: 0.4rem;
+  overflow-x: auto;
+  margin: 0.4rem 0;
+}
+
+/* 气泡淡入 */
+.bubble-fade-enter-active,
+.bubble-fade-leave-active {
+  transition: opacity 0.25s ease, transform 0.25s ease;
+}
+.bubble-fade-enter-from,
+.bubble-fade-leave-to {
+  opacity: 0;
+  transform: translateY(0.4rem);
+}
+
+/* 像素模式下的录音提示条 */
+.pixel-recording {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  border-radius: 0.6rem;
+  background: rgba(245, 63, 63, 0.08);
+  border: 1px solid rgba(245, 63, 63, 0.35);
+  color: rgba(255, 255, 255, 0.85);
+  font-size: clamp(0.78rem, 0.95vw, 0.88rem);
+  overflow: hidden;
 }
 </style>

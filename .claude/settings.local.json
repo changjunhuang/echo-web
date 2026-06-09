@@ -55,7 +55,22 @@
       "Bash(node captcha-diag.mjs)",
       "Bash(go version *)",
       "Bash(npx --no-install vue-tsc --noEmit)",
-      "Bash(git stash *)"
+      "Bash(git stash *)",
+      "Bash(npx vite *)",
+      "Bash(echo \"exit: $?\")",
+      "Bash(awk '{print $5}')",
+      "Bash(xargs -I {} taskkill //F //PID {})",
+      "Read(//c/Users/h4215/.claude/projects/E--FE-workspace-echo-web//**)",
+      "Read(//c/Users/h4215/.claude/projects//**)",
+      "Bash(xargs -I {} echo {})",
+      "Bash(echo \"started: $!\")",
+      "Read(//tmp/**)",
+      "Bash(echo \"EXIT=$?\")",
+      "Bash(node node_modules/vue-tsc/bin/vue-tsc.js --noEmit)",
+      "Bash(rm -f /tmp/vite3.log)",
+      "Bash(nohup npm run dev)",
+      "Bash(echo \"bash-pid=$!\")",
+      "Bash(disown)"
     ]
   }
 }
