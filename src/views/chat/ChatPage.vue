@@ -695,19 +695,23 @@ const tts = useSpeechSynthesis({
 })
 
 /* ========================================================================
- * 语音插话打断（barge-in）
+ * 语音插话打断（barge-in）—— 满足"用户说话 → 打断 TTS → 等用户说完 →
+ *                          拿到 chat 回复 → 播报新 TTS"的端到端流
  *
- * 需求：自动播放语音过程中，用户开口说话则立即打断当前 TTS；
- *      等用户本句识别结束（handleSentence）后，再走正常发送流程
- *      并播放新的 TTS 回复。
+ * 完整时序：
+ *   1. TTS 开始（autoPlay / 像素自动语音） → startBargeInListening() 拉起 mic
+ *   2. 用户开口说话 → displayInterim watcher 命中 → tts.stop() + 打 userIsInterrupting
+ *   3. TTS 取消回调触发 onEnd → tts.isSpeaking 翻 false
+ *   4. tts.isSpeaking watcher 检测到 bargeInArmed + userIsInterrupting → 保留 mic
+ *   5. mic 继续听写 → VAD 命中 → onSentence → handleSentence → handleSend
+ *   6. handleSend 内主动 stop mic，避免与 chat 回包混流
+ *   7. 后端 SSE 流式回包到 [DONE] → onDone 触发 tts.speak(...)（新 TTS）
+ *   8. tts.isSpeaking 翻 true → userIsInterrupting 清零 → 重新拉起 mic 监听下一次插话
  *
- * 实现要点：
- *  - TTS 开始时（autoPlay 或 像素自动语音）顺手拉起 mic 监听用户插话；
- *  - 用 grace 期 + 最少字符阈值过滤掉麦克风对 TTS 自身的回声误判；
- *  - 检测到真实插话后调用 tts.stop()，并打标 userIsInterrupting，
- *    让 TTS 结束分支知道 mic 要继续保留等用户把话说完；
- *  - 若 TTS 自然结束且无人插话，则视模式决定是否回收 mic（文本模式
- *    无 autoListen 时主动关麦，避免长期占用麦克风权限）。
+ * 关键不变量：
+ *   - bargeInArmed=true 期间 mic 永不主动关闭（除非用户/autoPlay 主动撤）
+ *   - 新的 TTS 永远在 SSE [DONE] 之后才发出，绝不会和用户句子"撞车"
+ *   - 用户主动停麦 / 关闭 autoPlay 时必须清掉 userIsInterrupting，避免脏状态泄漏
  * ====================================================================== */
 
 /** 当前 mic 是否因 barge-in 需求而开启（用于 TTS 结束时判断要不要回收） */
@@ -739,6 +743,14 @@ function startBargeInListening() {
   console.info('[chat] barge-in mic armed')
 }
 
+/** 兜底清理：把 barge-in 相关状态复原到"未插话"基线 */
+function resetBargeInState(reason: string) {
+  if (!bargeInArmed.value && !userIsInterrupting.value) return
+  bargeInArmed.value = false
+  userIsInterrupting.value = false
+  console.info('[chat] barge-in state reset (%s)', reason)
+}
+
 /** TTS 状态变化：开始时拉起 mic；结束时按"是否被打断"分别清理 */
 watch(tts.isSpeaking, (speaking, prev) => {
   if (speaking && !prev) {
@@ -750,7 +762,9 @@ watch(tts.isSpeaking, (speaking, prev) => {
   if (!speaking && prev && bargeInArmed.value) {
     bargeInArmed.value = false
     if (userIsInterrupting.value) {
-      // 用户已开口，mic 必须保持开启等 handleSentence 接管
+      // 用户已开口，mic 必须保持开启等 handleSentence 接管；
+      // 新 TTS 只有在 handleSend → SSE onDone 之后才会被触发，
+      // 那时 handleSend 会自己 stop mic、speak 完后我们再 arm mic。
       console.info('[chat] barge-in active, keep mic for user sentence')
       return
     }
@@ -766,7 +780,11 @@ watch(tts.isSpeaking, (speaking, prev) => {
   }
 })
 
-/** 用户在 TTS 播报期间开口 → 立即打断（grace 期 + 阈值过滤） */
+/**
+ * 用户在 TTS 播报期间开口 → 立即打断（grace 期 + 阈值过滤）。
+ * 打断后 mic 仍保持开启，直到 handleSentence 把识别结果送给后端、
+ * 后端 SSE 回包到 [DONE]，新的 TTS 再被 speak 出来。
+ */
 watch(
   () => displayInterim.value,
   (text) => {
@@ -776,11 +794,25 @@ watch(
     if (trimmed.length < BARGE_IN_MIN_LEN) return
     if (userIsInterrupting.value) return
     userIsInterrupting.value = true
-    console.info('[chat] barge-in detected, interim="%s" → stop TTS', trimmed)
+    console.info(
+      '[chat] barge-in detected, interim="%s" → stop TTS, wait for user sentence',
+      trimmed,
+    )
     tts.stop()
     speakingId.value = null
   },
 )
+
+/**
+ * 用户手动关麦时（handleToggleMic / speech 自然 onend）→ 兜底清掉插话标记，
+ * 避免脏状态泄漏到下一轮 TTS 周期。
+ */
+watch(isListening, (listening, prev) => {
+  if (prev && !listening && bargeInArmed.value) {
+    // mic 是被外部因素关掉的（用户主动 stop / 浏览器异常），不是 barge-in 流程自己关的
+    resetBargeInState('mic stopped externally')
+  }
+})
 
 /** 持久化 autoPlay 状态：变更时写 localStorage；关闭时立即停播 */
 watch(autoPlay, (v) => {
@@ -797,7 +829,7 @@ watch(autoPlay, (v) => {
       // barge-in 拉起的 mic 也一并关掉，避免后台空转
       speech.stop()
     }
-    bargeInArmed.value = false
+    resetBargeInState('autoPlay disabled')
   }
 })
 
@@ -1036,6 +1068,8 @@ async function handleSend() {
       await scrollToBottom()
     },
     () => {
+      // 仅在 SSE 收到 [DONE] 之后才会触发；
+      // 这是"新 TTS 必须等用户句子识别 + chat 回包完成"的硬保证点。
       chatStore.isStreaming = false
       abortController = null
       // 流式完成：若开启了自动播报，朗读最后一条 assistant 消息
@@ -1046,6 +1080,7 @@ async function handleSend() {
         lastMsg.content.trim()
       if (shouldSpeak) {
         speakingId.value = lastMsg.id
+        console.info('[chat] SSE done, playing new TTS for msg=%s', lastMsg.id)
         tts.speak(lastMsg.content)
       } else {
         // 不播报的情况下直接恢复录音

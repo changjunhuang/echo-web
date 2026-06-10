@@ -131,17 +131,44 @@ func chatHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no")
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "Streaming unsupported", http.StatusInternalServerError)
+		return
+	}
 
-	chunks := strings.Split(response, "")
-	for _, ch := range chunks {
-		data, _ := json.Marshal(ch)
+	// 按 OpenAI 风格发送增量帧：data: {"choices":[{"delta":{"content":"<char>"}}]}\n\n
+	// 这样前端可以无差别地复用 OpenAI 兼容的 SSE 解析器
+	for _, ch := range chunksOfString(response) {
+		frame := map[string]interface{}{
+			"choices": []map[string]interface{}{
+				{"delta": map[string]string{"content": ch}},
+			},
+		}
+		data, err := json.Marshal(frame)
+		if err != nil {
+			log.Printf("[chat] marshal frame failed: %v", err)
+			continue
+		}
 		fmt.Fprintf(w, "data: %s\n\n", data)
-		w.(http.Flusher).Flush()
+		flusher.Flush()
 		time.Sleep(20 * time.Millisecond)
 	}
 
-	fmt.Fprintln(w, "data: [DONE]")
-	w.(http.Flusher).Flush()
+	// 终止帧：data: [DONE]\n\n
+	fmt.Fprintf(w, "data: [DONE]\n\n")
+	flusher.Flush()
+	log.Printf("[chat] stream done sessionId=%s", req.SessionID)
+}
+
+// chunksOfString 将字符串切成字符切片，按 UTF-8 rune 切，避免把多字节字符拆坏
+func chunksOfString(s string) []string {
+	out := make([]string, 0, len(s))
+	for _, r := range s {
+		out = append(out, string(r))
+	}
+	return out
 }
 
 func completionsHandler(w http.ResponseWriter, r *http.Request) {
