@@ -70,7 +70,10 @@
       "Bash(rm -f /tmp/vite3.log)",
       "Bash(nohup npm run dev)",
       "Bash(echo \"bash-pid=$!\")",
-      "Bash(disown)"
+      "Bash(disown)",
+      "Bash(node --test test/sse-parse.test.mjs)",
+      "Bash(node --test test/sse-e2e.test.mjs)",
+      "Bash(node --test test/sse-parse.test.mjs test/sse-e2e.test.mjs)"
     ]
   }
 }

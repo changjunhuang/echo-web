@@ -17,7 +17,9 @@ import type { ChatRequest, ChatResponse } from '@/types/chat'
 
 /** SSE 帧（解析后的最小单元） */
 interface SseFrame {
-  /** 原始 data 行（去前缀） */
+  /** event 名（默认 message，可省略），例如 start / delta / finish */
+  event: string
+  /** 原始 data 行（去前缀，多行用 \n 拼接） */
   data: string
 }
 
@@ -30,7 +32,11 @@ function makeSseBuffer() {
      * （只有含完整 \n\n 终止符的 data 行才会被吐出；否则保留在 buffer）
      */
     push(chunk: string): SseFrame[] {
-      buffer += chunk
+      // 关键：把 \r\n 和裸 \r 归一化成 \n，否则后端按 HTTP 规范写出
+      // "data: ...\r\n\r\n" 时，indexOf('\n\n') 永远 -1，buffer 越积越大，
+      // 表现就是"前端拿到流却一次性才显示"。归一化后用 \n\n 切分就对得上
+      // SSE 规范（事件以空行结束）。
+      buffer += chunk.replace(/\r\n/g, '\n').replace(/(?<!\n)\r/g, '\n')
       const out: SseFrame[] = []
       // 按 \n\n 切分（SSE 事件以空行结束）
       let sepIndex = buffer.indexOf('\n\n')
@@ -57,8 +63,11 @@ function makeSseBuffer() {
   }
 }
 
-/** 把一段 SSE event 文本解析成一个 data 帧（忽略注释行 / event: / id: 等） */
+/** 把一段 SSE event 文本解析成一个 {event,data} 帧。
+ * 忽略注释行（`:` 开头），其余按 SSE 规范 `field: value` 解析；
+ * 这里只关心 `event` 和 `data`，其它字段（id/retry）丢弃。 */
 function parseSseEvent(eventText: string): SseFrame | null {
+  let eventName = 'message' // SSE 默认事件名
   const dataLines: string[] = []
   for (const rawLine of eventText.split('\n')) {
     const line = rawLine.replace(/\r$/, '')
@@ -69,10 +78,11 @@ function parseSseEvent(eventText: string): SseFrame | null {
     const field = line.slice(0, idx)
     let value = line.slice(idx + 1)
     if (value.startsWith(' ')) value = value.slice(1)
-    if (field === 'data') dataLines.push(value)
+    if (field === 'event') eventName = value || 'message'
+    else if (field === 'data') dataLines.push(value)
   }
-  if (dataLines.length === 0) return null
-  return { data: dataLines.join('\n') }
+  if (dataLines.length === 0 && eventName === 'message') return null
+  return { event: eventName, data: dataLines.join('\n') }
 }
 
 /** 从 SSE 帧里提取增量内容。兼容 OpenAI 风格与裸字符串两种格式 */
@@ -163,23 +173,54 @@ export function sendChatMessageStream(
       const decoder = new TextDecoder('utf-8')
       const sse = makeSseBuffer()
       let receivedAny = false
+      let frameCount = 0
 
       try {
+        let finished = false
         while (true) {
           const { done, value } = await reader.read()
           if (done) {
             // 收尾：把 buffer 残余帧吐出来（兼容服务器未以 \n\n 收尾的情况）
             const tail = sse.flush()
-            for (const f of tail) handleFrame(f, onChunk, onImageUrl, () => (receivedAny = true))
+            for (const f of tail) {
+              handleFrame(
+                f,
+                onChunk,
+                onImageUrl,
+                () => {
+                  finished = true
+                },
+                () => (receivedAny = true),
+              )
+            }
+            frameCount += tail.length
             break
           }
           const text = decoder.decode(value, { stream: true })
           if (text) {
             const frames = sse.push(text)
-            for (const f of frames) handleFrame(f, onChunk, onImageUrl, () => (receivedAny = true))
+            frameCount += frames.length
+            for (const f of frames) {
+              handleFrame(
+                f,
+                onChunk,
+                onImageUrl,
+                () => {
+                  finished = true
+                },
+                () => (receivedAny = true),
+              )
+            }
+            // 后端发 finish 帧就算结束，不再等流关闭
+            if (finished) break
           }
         }
-        console.info('[sse] ← stream closed, receivedAny=%s', receivedAny)
+        console.info(
+          '[sse] ← stream closed, receivedAny=%s, frames=%d, finished=%s',
+          receivedAny,
+          frameCount,
+          finished,
+        )
       } finally {
         try {
           reader.releaseLock()
@@ -201,21 +242,92 @@ export function sendChatMessageStream(
   return controller
 }
 
-/** 单帧处理：完成判定 + 内容提取 + 上报 */
+/** 单帧处理：完成判定 + 内容提取 + 上报。
+ * 兼容三种后端协议：
+ *   1. OpenAI 风格（默认事件 / 无 event:）：
+ *      data: {"choices":[{"delta":{"content":"..."}}]}
+ *   2. 实际后端 event 风格：
+ *      event: start   data: {"sessionId":"..."}
+ *      event: delta   data: {"delta":"增量片段","reply":"累积文本"}
+ *      event: finish  data: {"reply":"完整文本","sessionId":"..."}
+ *   3. 老式 JSON 包络：{data:{reply, imageUrl}}
+ *
+ * 关键：finish 帧**不**调用 onChunk，避免与已累积的 delta 文本重复。 */
 function handleFrame(
   frame: SseFrame,
   onChunk: (chunk: string) => void,
   onImageUrl: ((imageUrl: string) => void) | undefined,
+  onFinish: ((payload: { reply?: string; sessionId?: string }) => void) | undefined,
   markReceived: () => void,
 ) {
   const data = frame.data.trim()
-  if (!data) return
-  if (data === '[DONE]') {
-    // 不在这里 onDone：reader.read 返回 done 时统一处理，避免漏帧
+  const event = frame.event
+
+  // OpenAI 风格的结束哨兵
+  if (data === '[DONE]') return
+
+  // 没有任何 payload 时，仅当是 start 这种"握手帧"打日志即可
+  if (!data) {
+    if (event === 'start') console.info('[sse] ← event=start')
     return
   }
   markReceived()
-  // 兼容老式 JSON 包络：{code, data:{reply, imageUrl}}
+
+  // ----- 实际后端的 event 风格 -----
+  if (event === 'delta' || event === 'message') {
+    if (data.startsWith('{')) {
+      try {
+        const parsed = JSON.parse(data) as {
+          choices?: Array<{ delta?: { content?: string } }>
+          delta?: string
+          reply?: string
+          imageUrl?: string
+          sessionId?: string
+          data?: { reply?: string; imageUrl?: string }
+        }
+        const oaContent = parsed.choices?.[0]?.delta?.content
+        if (typeof oaContent === 'string' && oaContent) {
+          onChunk(oaContent)
+          return
+        }
+        // 实际后端：取 delta 增量；若只有 reply 字段也作为增量（兼容老格式）
+        const inc = parsed.delta ?? parsed.reply
+        if (typeof inc === 'string' && inc) {
+          onChunk(inc)
+        }
+        if (parsed.imageUrl && onImageUrl) onImageUrl(parsed.imageUrl)
+        return
+      } catch {
+        // 非法 JSON：落到下方纯文本兜底
+      }
+    }
+    onChunk(extractDeltaContent(data))
+    return
+  }
+
+  if (event === 'start') {
+    console.info('[sse] ← event=start, data=%s', data.slice(0, 80))
+    return
+  }
+
+  if (event === 'finish' || event === 'done' || event === 'complete') {
+    // 关键：finish 帧只用作结束信号，**不再追加 reply**，
+    // 否则 delta 已拼好全文，再追加一次就会出现重复文本。
+    let payload: { reply?: string; sessionId?: string } | undefined
+    if (data.startsWith('{')) {
+      try {
+        const parsed = JSON.parse(data) as { reply?: string; sessionId?: string }
+        payload = { reply: parsed.reply, sessionId: parsed.sessionId }
+      } catch {
+        /* ignore */
+      }
+    }
+    console.info('[sse] ← event=finish, hasReply=%s', Boolean(payload?.reply))
+    onFinish?.(payload ?? {})
+    return
+  }
+
+  // 未知 / 默认事件类型：尝试 OpenAI 包络 → 老式 JSON 包络 → 纯文本
   if (data.startsWith('{')) {
     try {
       const parsed = JSON.parse(data) as {
@@ -226,15 +338,11 @@ function handleFrame(
         onChunk(parsed.choices[0].delta.content)
         return
       }
-      if (parsed.data?.reply) {
-        onChunk(parsed.data.reply)
-      }
-      if (parsed.data?.imageUrl && onImageUrl) {
-        onImageUrl(parsed.data.imageUrl)
-      }
+      if (parsed.data?.reply) onChunk(parsed.data.reply)
+      if (parsed.data?.imageUrl && onImageUrl) onImageUrl(parsed.data.imageUrl)
       return
     } catch {
-      // 非法 JSON 当作纯文本处理
+      /* fallthrough */
     }
   }
   onChunk(extractDeltaContent(data))
