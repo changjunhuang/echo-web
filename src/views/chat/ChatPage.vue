@@ -219,14 +219,18 @@
                   </div>
                   <!-- 普通文本消息 -->
                   <div v-else class="message-content" v-html="renderMarkdown(msg.content)" />
-                  <div v-if="msg.role === 'assistant' && msg.imageUrl" class="message-image">
-                    <el-image
-                      :src="msg.imageUrl"
-                      :preview-src-list="[msg.imageUrl]"
-                      fit="contain"
-                      class="chat-image"
-                    />
-                  </div>
+                  <ChatImage
+                    v-if="msg.role === 'assistant' && msg.imageUrl"
+                    :src="msg.imageUrl"
+                    :alt="msg.content?.slice(0, 30)"
+                    class="message-image"
+                  />
+                  <!-- 附件列表：图片走预览，文件走下载卡片（多资源/混合） -->
+                  <ChatAttachment
+                    v-if="msg.role === 'assistant' && msg.attachments && msg.attachments.length"
+                    :attachments="msg.attachments"
+                    class="message-attachments"
+                  />
                 </template>
               </div>
               <div class="message-actions" v-if="msg.role === 'user' && !editingMessageId">
@@ -556,6 +560,8 @@ import { useSpeechRecognition } from '@/composables/useSpeechRecognition'
 import { useSpeechSynthesis } from '@/composables/useSpeechSynthesis'
 import PixelCharacter from '@/components/PixelCharacter.vue'
 import PixelScene from '@/components/PixelScene.vue'
+import ChatImage from '@/components/ChatImage.vue'
+import ChatAttachment from '@/components/ChatAttachment.vue'
 import { detectEmotion, EMOTION_LABELS, type Emotion } from '@/utils/emotion'
 
 const chatStore = useChatStore()
@@ -1096,6 +1102,10 @@ async function handleSend() {
     },
     async (imageUrl) => {
       chatStore.setMessageImageUrl(sessionId, imageUrl)
+      await scrollToBottom()
+    },
+    async (attachments) => {
+      chatStore.appendMessageAttachments(sessionId, attachments)
       await scrollToBottom()
     },
   )
@@ -2245,6 +2255,11 @@ const placeholderHint = computed(() => {
   border-radius: 0.75rem;
   overflow: hidden;
   max-width: 28rem;
+}
+
+/* 附件列表（图片 / 文件混合） */
+.message-attachments {
+  margin-top: 0.5rem;
 }
 
 .chat-image {

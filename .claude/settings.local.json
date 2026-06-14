@@ -73,7 +73,12 @@
       "Bash(disown)",
       "Bash(node --test test/sse-parse.test.mjs)",
       "Bash(node --test test/sse-e2e.test.mjs)",
-      "Bash(node --test test/sse-parse.test.mjs test/sse-e2e.test.mjs)"
+      "Bash(node --test test/sse-parse.test.mjs test/sse-e2e.test.mjs)",
+      "Bash(node --test test/chat-image.test.mjs)",
+      "Bash(node --test test/sse-parse.test.mjs test/sse-e2e.test.mjs test/chat-image.test.mjs)",
+      "Bash(node --test --test-concurrency=1 test/sse-parse.test.mjs test/sse-e2e.test.mjs test/chat-image.test.mjs)",
+      "Bash(npm test *)",
+      "Bash(cmd *)"
     ]
   }
 }

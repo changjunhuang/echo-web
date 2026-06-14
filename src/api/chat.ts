@@ -13,7 +13,7 @@
  */
 
 import request from './index'
-import type { ChatRequest, ChatResponse } from '@/types/chat'
+import type { ChatAttachment, ChatRequest, ChatResponse } from '@/types/chat'
 
 /** SSE 帧（解析后的最小单元） */
 interface SseFrame {
@@ -126,6 +126,7 @@ export function sendChatMessageStream(
   onDone: () => void,
   onError: (error: Error) => void,
   onImageUrl?: (imageUrl: string) => void,
+  onAttachments?: (attachments: ChatAttachment[]) => void,
 ): AbortController {
   const controller = new AbortController()
   const baseURL = import.meta.env.VITE_API_BASE_URL || '/api'
@@ -156,10 +157,14 @@ export function sendChatMessageStream(
       if (contentType.includes('application/json') && !contentType.includes('event-stream')) {
         const data = await response.json()
         const reply =
-          (data as { data?: { reply?: string; imageUrl?: string } }).data?.reply ?? ''
+          (data as { data?: { reply?: string; imageUrl?: string; attachments?: RawAttachment[] } }).data?.reply ?? ''
         const imageUrl = (data as { data?: { imageUrl?: string } }).data?.imageUrl
+        const attachments = normalizeAttachments(
+          (data as { data?: { attachments?: RawAttachment[] } }).data?.attachments,
+        )
         if (reply) onChunk(reply)
         if (imageUrl) onImageUrl?.(imageUrl)
+        if (attachments.length) onAttachments?.(attachments)
         onDone()
         return
       }
@@ -187,6 +192,7 @@ export function sendChatMessageStream(
                 f,
                 onChunk,
                 onImageUrl,
+                onAttachments,
                 () => {
                   finished = true
                 },
@@ -205,6 +211,7 @@ export function sendChatMessageStream(
                 f,
                 onChunk,
                 onImageUrl,
+                onAttachments,
                 () => {
                   finished = true
                 },
@@ -242,21 +249,70 @@ export function sendChatMessageStream(
   return controller
 }
 
+/**
+ * 后端可能给到的附件原始结构（命名空间宽松，容错缺失字段）。
+ * 协议上每条 attachment 至少包含 { name, url }；其他字段（mimeType / size /
+ * type）可选；缺 id 时前端按 url+name 自建。
+ */
+type RawAttachment = {
+  id?: string
+  name?: string
+  url?: string
+  mimeType?: string
+  mime_type?: string
+  size?: number
+  type?: 'image' | 'file'
+}
+
+/** 把后端传来的原始 attachment 规整为 ChatAttachment；空 / 非法项过滤掉 */
+function normalizeAttachments(raw: unknown): ChatAttachment[] {
+  if (!Array.isArray(raw)) return []
+  const out: ChatAttachment[] = []
+  for (const item of raw) {
+    if (!item || typeof item !== 'object') continue
+    const r = item as RawAttachment
+    const url = typeof r.url === 'string' ? r.url.trim() : ''
+    if (!url) continue
+    const name = (typeof r.name === 'string' && r.name.trim()) || url.split('/').pop() || '附件'
+    const mimeType = r.mimeType ?? r.mime_type
+    const size = typeof r.size === 'number' ? r.size : undefined
+    // type 字段缺省时按 mimeType 前缀推断
+    const inferred: 'image' | 'file' | undefined =
+      r.type === 'image' || r.type === 'file'
+        ? r.type
+        : mimeType?.toLowerCase().startsWith('image/')
+        ? 'image'
+        : undefined
+    out.push({
+      id: r.id || `${url}#${name}`,
+      name,
+      url,
+      mimeType,
+      size,
+      type: inferred,
+      createdAt: Date.now(),
+    })
+  }
+  return out
+}
+
 /** 单帧处理：完成判定 + 内容提取 + 上报。
  * 兼容三种后端协议：
  *   1. OpenAI 风格（默认事件 / 无 event:）：
  *      data: {"choices":[{"delta":{"content":"..."}}]}
  *   2. 实际后端 event 风格：
  *      event: start   data: {"sessionId":"..."}
- *      event: delta   data: {"delta":"增量片段","reply":"累积文本"}
- *      event: finish  data: {"reply":"完整文本","sessionId":"..."}
- *   3. 老式 JSON 包络：{data:{reply, imageUrl}}
+ *      event: delta   data: {"delta":"增量片段","reply":"累积文本","attachments":[...]}
+ *      event: finish  data: {"reply":"完整文本","sessionId":"...","attachments":[...]}
+ *   3. 老式 JSON 包络：{data:{reply, imageUrl, attachments}}
  *
- * 关键：finish 帧**不**调用 onChunk，避免与已累积的 delta 文本重复。 */
+ * 关键：finish 帧**不**调用 onChunk，避免与已累积的 delta 文本重复。
+ * attachments 在 delta / finish / 老式包络里都会解析并透传给 onAttachments。 */
 function handleFrame(
   frame: SseFrame,
   onChunk: (chunk: string) => void,
   onImageUrl: ((imageUrl: string) => void) | undefined,
+  onAttachments: ((attachments: ChatAttachment[]) => void) | undefined,
   onFinish: ((payload: { reply?: string; sessionId?: string }) => void) | undefined,
   markReceived: () => void,
 ) {
@@ -283,19 +339,21 @@ function handleFrame(
           reply?: string
           imageUrl?: string
           sessionId?: string
-          data?: { reply?: string; imageUrl?: string }
+          attachments?: RawAttachment[]
+          data?: { reply?: string; imageUrl?: string; attachments?: RawAttachment[] }
         }
         const oaContent = parsed.choices?.[0]?.delta?.content
         if (typeof oaContent === 'string' && oaContent) {
           onChunk(oaContent)
-          return
-        }
-        // 实际后端：取 delta 增量；若只有 reply 字段也作为增量（兼容老格式）
-        const inc = parsed.delta ?? parsed.reply
-        if (typeof inc === 'string' && inc) {
-          onChunk(inc)
+        } else {
+          // 实际后端：取 delta 增量；若只有 reply 字段也作为增量（兼容老格式）
+          const inc = parsed.delta ?? parsed.reply
+          if (typeof inc === 'string' && inc) {
+            onChunk(inc)
+          }
         }
         if (parsed.imageUrl && onImageUrl) onImageUrl(parsed.imageUrl)
+        emitAttachments(parsed.attachments, onAttachments)
         return
       } catch {
         // 非法 JSON：落到下方纯文本兜底
@@ -314,15 +372,26 @@ function handleFrame(
     // 关键：finish 帧只用作结束信号，**不再追加 reply**，
     // 否则 delta 已拼好全文，再追加一次就会出现重复文本。
     let payload: { reply?: string; sessionId?: string } | undefined
+    let attachments: ChatAttachment[] = []
     if (data.startsWith('{')) {
       try {
-        const parsed = JSON.parse(data) as { reply?: string; sessionId?: string }
+        const parsed = JSON.parse(data) as {
+          reply?: string
+          sessionId?: string
+          attachments?: RawAttachment[]
+        }
         payload = { reply: parsed.reply, sessionId: parsed.sessionId }
+        attachments = normalizeAttachments(parsed.attachments)
       } catch {
         /* ignore */
       }
     }
-    console.info('[sse] ← event=finish, hasReply=%s', Boolean(payload?.reply))
+    console.info(
+      '[sse] ← event=finish, hasReply=%s, attachments=%d',
+      Boolean(payload?.reply),
+      attachments.length,
+    )
+    if (attachments.length) onAttachments?.(attachments)
     onFinish?.(payload ?? {})
     return
   }
@@ -332,7 +401,8 @@ function handleFrame(
     try {
       const parsed = JSON.parse(data) as {
         choices?: Array<{ delta?: { content?: string } }>
-        data?: { reply?: string; imageUrl?: string }
+        data?: { reply?: string; imageUrl?: string; attachments?: RawAttachment[] }
+        attachments?: RawAttachment[]
       }
       if (parsed.choices?.[0]?.delta?.content) {
         onChunk(parsed.choices[0].delta.content)
@@ -340,10 +410,23 @@ function handleFrame(
       }
       if (parsed.data?.reply) onChunk(parsed.data.reply)
       if (parsed.data?.imageUrl && onImageUrl) onImageUrl(parsed.data.imageUrl)
+      // attachments 既可能在顶层，也可能在 data.* 里（老式包络）
+      const rawAtts = parsed.attachments ?? parsed.data?.attachments
+      emitAttachments(rawAtts, onAttachments)
       return
     } catch {
       /* fallthrough */
     }
   }
   onChunk(extractDeltaContent(data))
+}
+
+/** 把原始附件数组规整后透传给上游；空数组直接跳过，避免无谓回调 */
+function emitAttachments(
+  raw: RawAttachment[] | undefined,
+  onAttachments: ((attachments: ChatAttachment[]) => void) | undefined,
+) {
+  if (!onAttachments) return
+  const list = normalizeAttachments(raw)
+  if (list.length) onAttachments(list)
 }
