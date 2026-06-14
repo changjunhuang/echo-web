@@ -4,153 +4,68 @@
 
 ## 技术栈
 
-| 类别       | 选型                                                 |
-| ---------- | ---------------------------------------------------- |
-| 框架       | Vue 3.5（`<script setup>` SFC）                      |
-| 语言       | TypeScript 5.9                                       |
-| 构建工具   | Vite 8                                               |
-| UI 组件库  | Element Plus 2.13 + `@element-plus/icons-vue`        |
-| 状态管理   | Pinia 3                                              |
-| 路由       | Vue Router 4（History 模式）                         |
-| HTTP 客户端 | Axios 1                                             |
-| 对象存储   | 七牛云（`qiniu-js` 3.4，浏览器直传）                 |
-| 工具库     | `nanoid`（ID 生成）                                  |
-| 类型检查   | `vue-tsc`                                            |
-| 演示后端   | Go 标准库 `net/http`（`server.go`）                  |
+| 类别        | 选型                                                    |
+| ----------- | ------------------------------------------------------- |
+| 框架 / 语言 | Vue 3.5（`<script setup>`） + TypeScript 5.9            |
+| 构建        | Vite 8                                                  |
+| UI / 状态   | Element Plus 2.13 · Pinia 3 · Vue Router 4              |
+| 网络        | Axios 1 · Fetch + ReadableStream（SSE）                 |
+| 对象存储    | 七牛云（`qiniu-js` 3.4，浏览器直传）                    |
+| 语音        | Web Speech API（SpeechRecognition + SpeechSynthesis）   |
+| 演示后端    | Go `net/http`（`server.go`，关键字 mock）               |
 
-## 目录结构
+## 功能亮点
 
-```
-echo-web/
-├── server.go                  # Go 演示后端（SSE + 对话 + IP）
-├── index.html                 # 入口 HTML
-├── vite.config.ts             # Vite 配置（@ 别名、/api 代理）
-├── package.json
-├── tsconfig*.json
-├── .env                       # 前端环境变量（API 地址、默认模型）
-├── .env.qiniu                 # 七牛云配置样例
-├── public/                    # 静态资源
-└── src/
-    ├── main.ts                # 入口：注册 Element Plus / Pinia / Router
-    ├── App.vue                # 根组件（<RouterView />）
-    ├── api/                   # 接口请求层
-    │   ├── index.ts           # Axios 实例 + 拦截器
-    │   ├── chat.ts            # 对话（流式 / 非流式）
-    │   └── upload.ts          # 文件上传 / 注册 / 列表 / 删除
-    ├── components/            # 通用组件
-    │   ├── AppHeader.vue      # 顶部导航
-    │   └── AdminSidebar.vue   # 后台侧边栏
-    ├── layouts/               # 布局壳
-    │   ├── DefaultLayout.vue  # 用户端布局（首页 / 对话）
-    │   └── AdminLayout.vue    # 后台布局（文件管理）
-    ├── router/                # 路由配置
-    ├── stores/                # Pinia 状态
-    │   ├── chat.ts            # 会话 / 消息 / 流式状态
-    │   └── upload.ts          # 文件列表与上传状态
-    ├── types/                 # TypeScript 类型定义
-    ├── views/                 # 页面级视图
-    │   ├── home/HomePage.vue
-    │   ├── chat/ChatPage.vue
-    │   ├── models/ModelsPage.vue
-    │   └── admin/FileUploadPage.vue
-    ├── styles/global.css
-    └── assets/
-```
+- **智能对话**：多会话管理、SSE 流式输出、停止/编辑/重试、Markdown 渲染、图片与文件附件。
+- **像素角色自由对话**：SVG 像素人物 + 按时段自动切换的场景背景，情绪标签驱动表情与手势。
+- **语音连续对话**：流式 ASR + 静音断句 + 自动续录，TTS 自动播报并支持 **barge-in 打断**。
+- **SSE 兼容层**：行缓冲 + `\r\n` 归一化，兼容 OpenAI 风格 / 命名事件 / 老式包络三种协议，已修复跨 chunk 边界丢帧。
+- **七牛云直传**：三步直传（凭证 → 直传 → 入库），拖拽 / 批量 10 并发 / 单文件 2GB / 失败仅重试入库。
+- **账号会话**：localStorage 持久化 + 启动校验，TTL 到期自动清理。
 
 ## 快速开始
 
-### 1. 安装依赖
-
 ```bash
 npm install
-# 或
-pnpm install
+npm run dev          # 前端  http://localhost:5173
+go run server.go     # 后端  :8080（可选，关键字 mock）
+npm run build        # 类型检查 + 构建
 ```
 
-### 2. 启动前端开发服务
+环境变量（`.env`）：
 
-```bash
-npm run dev
-```
+| 变量名                    | 说明                                 |
+| ------------------------- | ------------------------------------ |
+| `VITE_API_BASE_URL`       | 后端 API 基址，默认 `/api`           |
+| `VITE_DEFAULT_CHAT_MODEL` | 默认对话模型（如 `gpt-4o`）          |
 
-默认监听 `http://localhost:5173`，所有 `/api/**` 请求由 Vite 代理到 `http://localhost:8080`（见 `vite.config.ts`）。
+> 七牛云 AK/SK 等密钥保存在**后端**，前端仅使用后端签发的上传凭证。
 
-### 3. 启动演示后端（可选）
+## 后端接口
 
-仓库自带一个 Go 写的最小演示后端，提供 SSE 对话与客户端 IP 接口：
+| Method | Path                                                | 说明                       |
+| ------ | --------------------------------------------------- | -------------------------- |
+| POST   | `/api/chat`                                         | SSE 流式对话               |
+| POST   | `/api/chat/completions`                             | 非流式 JSON（OpenAI 兼容） |
+| POST   | `/api/auth/login` · `register` · `check` · `logout` | 账号会话                   |
+| POST   | `/api/file/token` · `register`                      | 上传凭证 / 完成入库        |
+| GET    | `/api/file/upload`  ·  DELETE `/api/file/upload/:id`| 列表 / 删除                |
+| GET    | `/api/ip`                                           | 客户端 IP（兜底会话标识）  |
 
-```bash
-go run server.go
-# 监听 :8080，路由：
-#   POST /api/chat               SSE 流式对话
-#   POST /api/chat/completions   非流式 JSON 对话
-#   GET  /api/ip                 客户端 IP
-```
-
-> 该演示后端不连接真实大模型，仅按关键字返回固定话术，方便本地联调前端流式协议。
-
-### 4. 打包构建
-
-```bash
-npm run build      # vue-tsc 类型检查 + vite build，产物在 dist/
-npm run preview    # 本地预览构建产物
-```
-
-## 环境变量
-
-在项目根目录创建 `.env`（或 `.env.development` / `.env.production`）：
-
-| 变量名                    | 必填 | 说明                                                       |
-| ------------------------- | ---- | ---------------------------------------------------------- |
-| `VITE_API_BASE_URL`       | 否   | 后端 API 基址，默认 `/api`（走 Vite 代理到 `:8080`）       |
-| `VITE_DEFAULT_CHAT_MODEL` | 否   | 默认对话模型，如 `gpt-4o`；会话初始化时会使用该值          |
-
-> `.env.qiniu` 为配置样例参考，七牛云 AK/SK/Bucket/域名等敏感信息应在 **后端** 保存，前端仅使用后端签发的上传凭证，请勿在浏览器端硬编码。
-
-## 功能详解
-
-### 智能对话（`/chat`）
-
-- **多会话管理**：左侧栏列出所有会话，支持新建、删除、切换。
-- **SSE 流式输出**：通过 `fetch` 读取 `text/event-stream`，逐 chunk 追加到消息气泡；支持「停止生成」（`AbortController`）。
-- **消息操作**：用户消息支持「复制 / 编辑 / 重试」；编辑后自动删除原 assistant 回复并重新生成。
-- **Markdown 渲染**：支持代码块（` ``` `）、行内代码、加粗、斜体、换行。
-- **图片消息**：assistant 回复可携带 `imageUrl`，自动渲染并支持预览。
-- **快捷提问**：空状态提供 4 个一键示例。
-- **身份与会话标识**：`userId` 持久化于 `localStorage`；`defaultSessionId` 基于客户端 IP 生成，便于跨刷新保留上下文。
-
-### 文件管理（`/admin/upload`）
-
-- **七牛云直传**：前端 → 后端 `/file/token` 申请上传凭证 → 浏览器使用 `qiniu-js` 分片直传至七牛云 → 通知后端 `/file/register` 入库。
-- **交互**：支持点击 / 拖拽到区域上传，批量最多 10 个并发，单文件上限 2GB。
-- **状态机**：`pending → uploading_qiniu → uploading_backend → success`（或 `error`），文件列表实时反映状态与进度。
-- **失败重试**：上传失败可一键重试；若七牛云已成功但后端注册失败，重试时仅重新通知后端，节省再次上传流量。
-- **统计面板**：总文件数、已上传、失败数、累计大小，支持「清空记录」「一键上传全部」。
-
-### 首页（`/home`）
-
-- 渐变深色背景，居中品牌展示 + 两个核心入口卡片（智能对话 / 文件管理），动画与微交互统一。
-
-## 后端接口约定
-
-前端依赖的后端接口（演示版见 `server.go`，生产版需自行实现）：
-
-| Method | Path                  | 说明                                |
-| ------ | --------------------- | ----------------------------------- |
-| POST   | `/api/chat`           | SSE 流式对话，返回 `data: ...` 帧  |
-| POST   | `/api/chat/completions` | 非流式 JSON 对话，OpenAI 兼容格式 |
-| GET    | `/api/ip`             | 客户端 IP（用于生成默认 sessionId） |
-| POST   | `/api/file/token`     | 申请七牛云上传凭证                  |
-| POST   | `/api/file/upload`    | 服务端中转上传（备用通道）          |
-| POST   | `/api/file/register`  | 上传完成后通知后端入库              |
-| GET    | `/api/file/upload`    | 文件列表                            |
-| DELETE | `/api/file/upload/:id`| 删除文件                            |
-
-SSE 帧协议：
+SSE 帧示例：
 
 ```
-data: {"choices":[{"delta":{"content":"..."}}]}\n\n
+data: {"choices":[{"delta":{"content":"H"}}]}\n\n
 data: [DONE]\n\n
 ```
 
-非流式响应为标准 `application/json`，形如 `{ id, choices: [{ message: { role, content }, finish_reason }], usage }`。
+## 架构演进方向
+
+| 现阶段问题                                           | 业界对标                                     | 本系统落地                                    |
+| ---------------------------------------------------- | -------------------------------------------- | --------------------------------------------- |
+| `ChatPage.vue` 3000+ 行，多模态/语音/打断耦合         | Vue 3 composable + 容器/展示分离             | 抽 `useChatStream` / `useVoiceAgent` / `useBargeIn` + `ChatInputBar` / `PixelStage` |
+| 历史拼成字符串发后端，prompt 注入风险、无 token 预算  | OpenAI / Anthropic 标准 `messages[]` 协议    | 切换为结构化数组，BFF 侧做窗口裁剪            |
+| SSE 三套协议共存                                      | Vercel AI SDK Data Stream Protocol           | 命名事件协议作正式版，旧协议在 BFF 适配       |
+| 像素角色情绪由前端关键字推断                          | 模型直接吐结构化标签（Tool / Function 风格） | 新增 `event: emotion` 帧，前端匹配仅作兜底    |
+| Go 后端仅 mock，无 Agent 内核                         | BFF + Agent Core 分层                        | 抽 `AgentService` 接口，mock 与真模型共用     |
+| 身份口径三套（nanoid / IP / auth session）            | 单一身份源                                   | 登录 → `auth.user.id`，未登录 → 匿名 nanoid   |
