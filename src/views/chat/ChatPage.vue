@@ -928,7 +928,10 @@ function resumeListeningIfNeeded() {
 }
 
 onMounted(() => {
-  chatStore.initDefaultSession()
+  chatStore.initDefaultSession().then(() => {
+    // 匿名场景下，确保 chatStore.sessionId 有值（登录态由 watch 自动同步）
+    chatStore.ensureAnonymousSession()
+  })
   // 部分浏览器（Chromium 系）首次调用前 getVoices 列表为空，
   // 在这里注册一次 voiceschanged 以便后续 pickVoice 能拿到中文音色。
   // 同时把 zh 候选名单打印出来，方便确认是否选到了想要的甜美少女音。
@@ -1006,25 +1009,35 @@ async function handleSend() {
   const text = inputText.value.trim()
   if (!text || chatStore.isStreaming) return
 
-  let sessionId = chatStore.currentSessionId
-  if (!sessionId) {
-    sessionId = chatStore.defaultSessionId
-    if (sessionId && !chatStore.sessions.find((s) => s.id === sessionId)) {
+  // UI 维度的会话 id（用于在侧边栏分组消息 / 切换历史对话）
+  // 跟后端收到的 sessionId（chatStore.sessionId，由 authStore 同步过来）是两件事：
+  //  - localSessionId：仅前端 UI 用，标记"这是哪段对话"
+  //  - chatStore.sessionId：实际写到 payload.sessionId 的值，必须等于后端登录返回的 sessionId
+  let localSessionId = chatStore.currentSessionId
+  if (!localSessionId) {
+    localSessionId = chatStore.defaultSessionId
+    if (localSessionId && !chatStore.sessions.find((s) => s.id === localSessionId)) {
       const defaultSession: ChatSession = {
-        id: sessionId,
+        id: localSessionId,
         title: '默认对话',
         messages: [],
         createdAt: Date.now(),
         updatedAt: Date.now(),
       }
       chatStore.sessions.unshift(defaultSession)
-      chatStore.currentSessionId = sessionId
+      chatStore.currentSessionId = localSessionId
     }
   }
-  if (!sessionId) {
+  if (!localSessionId) {
     ElMessage.warning('会话初始化中，请稍后重试')
     return
   }
+
+  // 后端请求里带的 sessionId：登录态下 = authStore.sessionId（与后端 /api/auth/login 返回值严格一致）
+  // 未登录态下 = IP 派生的 anonymous sessionId
+  // 之前这里直接用了 localSessionId，导致后端收到的 sessionId 是前端自生成的 nanoid/IP 串，
+  // 跟后端登录接口返回的 sessionId 永远对不上 —— 这就是用户报"前后端 sessionId 不一致"的根因
+  const wireSessionId = chatStore.sessionId || localSessionId
 
   // 在流式响应期间停掉录音，避免 TTS / 系统回声被识别成下一句
   if (isListening.value) {
@@ -1038,13 +1051,13 @@ async function handleSend() {
   // 由调用方决定消息来源（语音 / 键盘），默认 text
   const source = pendingSource.value
   pendingSource.value = 'text'
-  chatStore.addMessage(sessionId, { role: 'user', content: text, source })
+  chatStore.addMessage(localSessionId, { role: 'user', content: text, source })
   await scrollToBottom()
 
   chatStore.isStreaming = true
-  const assistantMsg = chatStore.addMessage(sessionId, { role: 'assistant', content: '' })
+  const assistantMsg = chatStore.addMessage(localSessionId, { role: 'assistant', content: '' })
 
-  const session = chatStore.sessions.find((s) => s.id === sessionId)
+  const session = chatStore.sessions.find((s) => s.id === localSessionId)
   if (!session) {
     chatStore.isStreaming = false
     return
@@ -1066,11 +1079,11 @@ async function handleSend() {
     {
       model: chatStore.selectedModel,
       userId: chatStore.userId,
-      sessionId: sessionId,
+      sessionId: wireSessionId,
       message: messageString,
     },
     async (chunk) => {
-      chatStore.appendToLastAssistantMessage(sessionId, chunk)
+      chatStore.appendToLastAssistantMessage(localSessionId, chunk)
       await scrollToBottom()
     },
     () => {
@@ -1101,11 +1114,11 @@ async function handleSend() {
       resumeListeningIfNeeded()
     },
     async (imageUrl) => {
-      chatStore.setMessageImageUrl(sessionId, imageUrl)
+      chatStore.setMessageImageUrl(localSessionId, imageUrl)
       await scrollToBottom()
     },
     async (attachments) => {
-      chatStore.appendMessageAttachments(sessionId, attachments)
+      chatStore.appendMessageAttachments(localSessionId, attachments)
       await scrollToBottom()
     },
   )

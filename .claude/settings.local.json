@@ -78,7 +78,14 @@
       "Bash(node --test test/sse-parse.test.mjs test/sse-e2e.test.mjs test/chat-image.test.mjs)",
       "Bash(node --test --test-concurrency=1 test/sse-parse.test.mjs test/sse-e2e.test.mjs test/chat-image.test.mjs)",
       "Bash(npm test *)",
-      "Bash(cmd *)"
+      "Bash(cmd *)",
+      "Bash(powershell -Command \"Stop-Process -Id 49756 -Force\")",
+      "Bash(node --test test/chat-session-id.test.mjs)",
+      "Bash(node -e \"const fs=require\\('fs'\\); const s=fs.readFileSync\\('E:/FE/work-self/workspace/echo-web/src/views/chat/ChatPage.vue','utf-8'\\); const i=s.indexOf\\('sendChatMessageStream'\\); console.log\\(JSON.stringify\\(s.slice\\(i, i+800\\)\\)\\);\")",
+      "Bash(./test_server_new.exe)",
+      "Bash(powershell -Command \"Stop-Process -Id 45052 -Force\")",
+      "Bash(powershell -Command \"Stop-Process -Id 44584 -Force\")",
+      "Bash(powershell -Command \"Stop-Process -Id 19680,8352 -Force\")"
     ]
   }
 }

@@ -254,6 +254,7 @@ function formatSize(bytes: number): string {
   return `${parseFloat((bytes / Math.pow(k, i)).toFixed(1))} ${sizes[i]}`
 }
 
+
 function getFileCategory(type: string): string {
   if (type.startsWith('image/')) return 'image'
   if (type.startsWith('video/')) return 'video'

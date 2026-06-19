@@ -133,7 +133,11 @@ export function sendChatMessageStream(
   const url = `${baseURL}/chat`
   const body = JSON.stringify({ ...payload, stream: true })
 
-  console.info('[sse] → POST %s, sessionId=%s', url, payload.sessionId)
+  console.info(
+    '[sse] → POST %s, sessionId=%s (该值应等于后端 /api/auth/login 返回的 sessionId)',
+    url,
+    payload.sessionId,
+  )
 
   fetch(url, {
     method: 'POST',

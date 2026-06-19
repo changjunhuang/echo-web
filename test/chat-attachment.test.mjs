@@ -385,7 +385,7 @@ test('ChatPage.vue 已经引入 ChatAttachment 并渲染', async () => {
   )
   assert.ok(src.includes('<ChatAttachment'), '应在模板里使用 <ChatAttachment>')
   assert.ok(
-    src.includes('chatStore.appendMessageAttachments(sessionId, attachments)'),
+    src.includes('chatStore.appendMessageAttachments(localSessionId, attachments)'),
     '应把 onAttachments 接到 store',
   )
 })

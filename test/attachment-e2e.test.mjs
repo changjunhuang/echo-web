@@ -118,7 +118,7 @@ test('ChatPage.vue：assistant 气泡里同时渲染 ChatImage 和 ChatAttachmen
     '应只在有 attachments 时才渲染',
   )
   assert.ok(
-    src.includes('chatStore.appendMessageAttachments(sessionId, attachments)'),
+    src.includes('chatStore.appendMessageAttachments(localSessionId, attachments)'),
     'handleSend 应把 attachments 写入 store',
   )
 })
