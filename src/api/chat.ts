@@ -1,25 +1,39 @@
 /**
- * 对话 API 模块
- * 与后端 server.go 中的 /api/chat、/api/chat/completions、/api/ip 端点对应。
+ * 对话 API 模块：Echo-AI 流式对话接口 `POST /chat` 的前端消费层。
  *
- * 关键设计：sendChatMessageStream 采用 SSE（Server-Sent Events）流式读取，
- * 由 fetch + ReadableStream 解析 text/event-stream 帧，逐 chunk 回调到上层。
- *   协议帧（与 README 一致）：
- *     data: {"choices":[{"delta":{"content":"..."}}]}\n\n
- *     data: [DONE]\n\n
+ * 协议格式（详见后端规范 v1）：
+ *   - 每条 SSE 帧只有一行 `data: {"type": "...", ...}`，**不带** `event:` 行
+ *   - 事件类型（按 `type` 字段分发）：
+ *       context          → RAG / 检索上下文摘要（{persona_len, core_count, l1_count}）
+ *       resource         → 附件（图片/音频/视频/文件），可多次，按 file_id+chunk_index 去重
+ *       tool             → 工具调用结果（{name, iter, ok, summary}）
+ *       prefix           → 级联小模型前缀（{text}，当前默认空字符串）
+ *       delta            → 大模型增量文本（{text}，必须 append）
+ *       done             → 整轮结束（{full} 已含完整文本与"附件：" markdown 段落）
+ *       memory_extracted → 长期记忆抽取（{ok} 或 {ok:false, error}），仅 stream=false 时出现
+ *   - 资源 URL **不带 scheme**（后端正则清掉 http/https/ //），前端必须调 resolveUrl() 拼接
  *
- * 兼容性：部分后端会把 delta 直接写成字符串（"H"），这里也兼容解析；
- * 残缺帧（跨 chunk 边界）会被 buffer 住直到换行补齐，避免把半个 JSON 抛给 JSON.parse。
+ * 关键实现：
+ *   - 残缺帧（跨 chunk 边界）由 makeSseBuffer 攒齐 \n\n 后再 parseSseEvent
+ *   - 解析后只看 `data.type`，不再依赖 frame.event（协议里根本没有 event: 行）
+ *   - 所有 callback 都是 optional，未订阅的不会抛错
  */
 
 import request from './index'
-import type { ChatAttachment, ChatRequest, ChatResponse } from '@/types/chat'
+import type {
+  ChatAttachment,
+  ChatContextInfo,
+  ChatMemoryResult,
+  ChatRequest,
+  ChatResponse,
+  ChatToolCall,
+} from '@/types/chat'
 
 /** SSE 帧（解析后的最小单元） */
 interface SseFrame {
-  /** event 名（默认 message，可省略），例如 start / delta / finish */
+  /** event 名（默认 message）。新协议不会带 event: 行，这里恒为 'message'，仅作占位 */
   event: string
-  /** 原始 data 行（去前缀，多行用 \n 拼接） */
+  /** data 行（去前缀，多行用 \n 拼接） */
   data: string
 }
 
@@ -27,29 +41,20 @@ interface SseFrame {
 function makeSseBuffer() {
   let buffer = ''
   return {
-    /**
-     * 把一段原始字节喂进来，返回解析出的一批完整 SSE 帧
-     * （只有含完整 \n\n 终止符的 data 行才会被吐出；否则保留在 buffer）
-     */
     push(chunk: string): SseFrame[] {
-      // 关键：把 \r\n 和裸 \r 归一化成 \n，否则后端按 HTTP 规范写出
-      // "data: ...\r\n\r\n" 时，indexOf('\n\n') 永远 -1，buffer 越积越大，
-      // 表现就是"前端拿到流却一次性才显示"。归一化后用 \n\n 切分就对得上
-      // SSE 规范（事件以空行结束）。
-      buffer += chunk.replace(/\r\n/g, '\n').replace(/(?<!\n)\r/g, '\n')
+      buffer += chunk
       const out: SseFrame[] = []
-      // 按 \n\n 切分（SSE 事件以空行结束）
-      let sepIndex = buffer.indexOf('\n\n')
+      let sepIndex = findEventSeparator(buffer)
       while (sepIndex !== -1) {
+        const sepLen = separatorLength(buffer, sepIndex)
         const event = buffer.slice(0, sepIndex)
-        buffer = buffer.slice(sepIndex + 2)
+        buffer = buffer.slice(sepIndex + sepLen)
         const frame = parseSseEvent(event)
         if (frame) out.push(frame)
-        sepIndex = buffer.indexOf('\n\n')
+        sepIndex = findEventSeparator(buffer)
       }
       return out
     },
-    /** 强制 flush（流结束 / 出错时调用） */
     flush(): SseFrame[] {
       if (!buffer.trim()) {
         buffer = ''
@@ -63,16 +68,32 @@ function makeSseBuffer() {
   }
 }
 
-/** 把一段 SSE event 文本解析成一个 {event,data} 帧。
- * 忽略注释行（`:` 开头），其余按 SSE 规范 `field: value` 解析；
- * 这里只关心 `event` 和 `data`，其它字段（id/retry）丢弃。 */
+/** 在 buffer 中找 SSE 事件分隔符（\n\n 的等价物） */
+function findEventSeparator(buf: string): number {
+  const i1 = buf.indexOf('\n\n')
+  if (i1 !== -1) return i1
+  const i2 = buf.indexOf('\r\n\r\n')
+  if (i2 !== -1) return i2
+  const i3 = buf.indexOf('\n\r\n')
+  if (i3 !== -1) return i3
+  return buf.indexOf('\r\n\n')
+}
+
+function separatorLength(buf: string, idx: number): number {
+  if (buf.startsWith('\n\n', idx)) return 2
+  if (buf.startsWith('\r\n\r\n', idx)) return 4
+  if (buf.startsWith('\n\r\n', idx)) return 3
+  if (buf.startsWith('\r\n\n', idx)) return 3
+  return 2
+}
+
+/** 把一段 SSE event 文本解析成一个 {event,data} 帧 */
 function parseSseEvent(eventText: string): SseFrame | null {
-  let eventName = 'message' // SSE 默认事件名
+  let eventName = 'message'
   const dataLines: string[] = []
   for (const rawLine of eventText.split('\n')) {
     const line = rawLine.replace(/\r$/, '')
     if (!line || line.startsWith(':')) continue
-    // SSE 规范：field 名后接冒号，空格可省略
     const idx = line.indexOf(':')
     if (idx === -1) continue
     const field = line.slice(0, idx)
@@ -81,29 +102,157 @@ function parseSseEvent(eventText: string): SseFrame | null {
     if (field === 'event') eventName = value || 'message'
     else if (field === 'data') dataLines.push(value)
   }
-  if (dataLines.length === 0 && eventName === 'message') return null
+  if (dataLines.length === 0) return null
   return { event: eventName, data: dataLines.join('\n') }
 }
 
-/** 从 SSE 帧里提取增量内容。兼容 OpenAI 风格与裸字符串两种格式 */
-function extractDeltaContent(data: string): string {
+/** 尝试把 data 解析成 JSON，失败时回退 null（不抛错） */
+function safeJsonParse(data: string): Record<string, unknown> | null {
   const trimmed = data.trim()
-  if (!trimmed) return ''
-  // OpenAI 兼容格式：{"choices":[{"delta":{"content":"..."}}]}
-  if (trimmed.startsWith('{')) {
-    try {
-      const parsed = JSON.parse(trimmed) as {
-        choices?: Array<{ delta?: { content?: string } }>
-      }
-      const content = parsed.choices?.[0]?.delta?.content
-      if (typeof content === 'string') return content
-    } catch {
-      // 不是合法 JSON，落到下方兜底
-    }
+  if (!trimmed || !trimmed.startsWith('{')) return null
+  try {
+    const parsed = JSON.parse(trimmed)
+    return typeof parsed === 'object' && parsed !== null
+      ? (parsed as Record<string, unknown>)
+      : null
+  } catch {
+    return null
   }
-  // 兜底：直接把整段 data 当作内容（兼容老式 demo 后端）
-  return trimmed
 }
+
+/* ========================================================================
+ * URL 处理：后端不带 scheme，前端必须自行拼接
+ * ====================================================================== */
+
+/**
+ * 给后端返回的"裸 URL"补 scheme。
+ *   - 已带 http/https → 原样返回
+ *   - 以 // 开头（协议相对）→ 用当前页协议补齐（继续跟随页面协议）
+ *   - 其他（裸域名）→ 默认拼 https://
+ *
+ * 关键决策：裸域名固定走 https:// 而不是 `window.location.protocol`，因为后端 CDN
+ * 几乎都是 HTTPS-only；如果跟随页面协议，dev 环境（页面是 http://）会把图片解析成
+ * http://，触发浏览器 mixed-content 拦截或 CDN 拒绝服务，导致图片预览功能彻底失
+ * 效。协议相对 (`//cdn/...`) 这种"主动跟随页面协议"的写法保持原意，仍然跟随。
+ *
+ * 绝对不要让 `<img src="cdn.example.com/foo.jpg">` 落到浏览器解析为相对路径。
+ */
+export function resolveUrl(url: string): string {
+  if (!url) return url
+  if (/^https?:\/\//i.test(url)) return url
+  // 协议相对：跟随当前页面协议（浏览器原生语义）
+  if (url.startsWith('//')) return `${window.location.protocol}${url}`
+  // 裸域名：默认 https://（CDN 资源通常 HTTPS；跟随 window.location.protocol 会
+  // 导致 dev 页（http://localhost）把图解析成 http://，CDN 不接受 / 浏览器拦截）
+  return `https://${url}`
+}
+
+/* ========================================================================
+ * 帧归一化：把 {type, ...} 的 data 解析成强类型对象
+ * ====================================================================== */
+
+/** context 帧归一化：{persona_len, core_count, l1_count} */
+function parseContextInfo(data: string): ChatContextInfo | null {
+  const obj = safeJsonParse(data)
+  if (!obj) return null
+  const personaLen = typeof obj.persona_len === 'number' ? obj.persona_len : undefined
+  const coreCount = typeof obj.core_count === 'number' ? obj.core_count : undefined
+  const l1Count = typeof obj.l1_count === 'number' ? obj.l1_count : undefined
+  // 三个字段都没有 → 视为无效帧
+  if (personaLen === undefined && coreCount === undefined && l1Count === undefined) return null
+  return {
+    personaLen: personaLen ?? 0,
+    coreCount: coreCount ?? 0,
+    l1Count: l1Count ?? 0,
+  }
+}
+
+/** tool 帧归一化：{name, iter, ok, summary} */
+function parseToolCall(data: string): ChatToolCall | null {
+  const obj = safeJsonParse(data)
+  if (!obj) return null
+  const name = typeof obj.name === 'string' ? obj.name : ''
+  const iter = typeof obj.iter === 'number' ? obj.iter : 0
+  const ok = obj.ok === true
+  const summary = typeof obj.summary === 'string' ? obj.summary : ''
+  if (!name && !summary) return null
+  return { name: name || 'tool', iter, ok, summary }
+}
+
+/** resource 帧归一化：详见 types/chat.ts */
+function parseResource(data: string): ChatAttachment | null {
+  const obj = safeJsonParse(data)
+  if (!obj) return null
+  // 必填：url；其他字段（name / modality / mime_type …）可选
+  const url = typeof obj.url === 'string' ? obj.url.trim() : ''
+  if (!url) return null
+  const name =
+    (typeof obj.display_name === 'string' && obj.display_name.trim()) ||
+    (typeof obj.name === 'string' && obj.name.trim()) ||
+    url.split('/').pop() ||
+    '附件'
+  const modality = obj.modality === 'image' || obj.modality === 'audio' || obj.modality === 'video' || obj.modality === 'file'
+    ? obj.modality
+    : inferModalityFromMime(obj.mime_type)
+  const mimeType = typeof obj.mime_type === 'string' ? obj.mime_type : undefined
+  return {
+    id: typeof obj.event_id === 'string' && obj.event_id
+      ? obj.event_id
+      : `${typeof obj.file_id === 'string' ? obj.file_id : url}#${obj.chunk_index ?? 0}`,
+    name,
+    displayName: typeof obj.display_name === 'string' ? obj.display_name : name,
+    url,
+    fileId: typeof obj.file_id === 'string' ? obj.file_id : undefined,
+    modality,
+    mimeType,
+    chunkIndex: typeof obj.chunk_index === 'number' ? obj.chunk_index : 0,
+    totalChunks: typeof obj.total_chunks === 'number' ? obj.total_chunks : 1,
+    sizeBytes: typeof obj.size_bytes === 'number' ? obj.size_bytes : undefined,
+    similarity: typeof obj.similarity === 'number' ? obj.similarity : undefined,
+    source: typeof obj.source === 'string' ? obj.source : undefined,
+    iter: typeof obj.iter === 'number' ? obj.iter : undefined,
+  }
+}
+
+/** 按 mime_type 前缀兜底推断 modality */
+function inferModalityFromMime(mime: unknown): ChatAttachment['modality'] {
+  if (typeof mime !== 'string') return 'file'
+  const m = mime.toLowerCase()
+  if (m.startsWith('image/')) return 'image'
+  if (m.startsWith('audio/')) return 'audio'
+  if (m.startsWith('video/')) return 'video'
+  return 'file'
+}
+
+/** memory_extracted 帧归一化：{ok, error?} */
+function parseMemoryResult(data: string): ChatMemoryResult | null {
+  const obj = safeJsonParse(data)
+  if (!obj) return null
+  const ok = obj.ok === true
+  const error = typeof obj.error === 'string' ? obj.error : undefined
+  return { ok, error }
+}
+
+/** done 帧归一化：{full, sessionId} */
+function parseDonePayload(data: string): { full?: string; sessionId?: string } {
+  const obj = safeJsonParse(data)
+  if (!obj) return {}
+  return {
+    full: typeof obj.full === 'string' ? obj.full : undefined,
+    sessionId: typeof obj.sessionId === 'string' ? obj.sessionId : undefined,
+  }
+}
+
+/** 取 {text} 字段，缺省返回 '' */
+function extractText(obj: Record<string, unknown>): string {
+  if (typeof obj.text === 'string' && obj.text) return obj.text
+  if (typeof obj.content === 'string' && obj.content) return obj.content
+  return ''
+}
+
+/* ========================================================================
+ * HTTP 入口
+ * ====================================================================== */
 
 export function getClientIP(): Promise<string> {
   return request.get('/ip')
@@ -115,19 +264,44 @@ export function sendChatMessage(payload: ChatRequest): Promise<ChatResponse> {
 
 /**
  * SSE 流式对话：返回 AbortController，调用方可在需要时中止。
- * - onChunk: 每个增量片段回调一次（已按字符/词为单位切好）
- * - onDone: 收到 [DONE] 或流自然结束
- * - onError: 解析 / 网络错误（已忽略 AbortError，避免把主动取消当成异常）
- * - onImageUrl: 兼容老式 JSON 包络里的图片字段
+ *
+ * options 形态（避免位置参数无限膨胀）：
+ *   - onChunk:     每个 delta 增量片段（拼进 assistant 消息）
+ *   - onPrefix:    级联小模型前缀（与 delta 走同一通道）
+ *   - onContext:   RAG / 检索上下文摘要（persona / L0 / L1 计数）
+ *   - onTool:      工具调用结果（单条）
+ *   - onResource:  附件资源（单条，按 file_id+chunk_index 去重由调用方负责）
+ *   - onMemory:    长期记忆抽取结果（成功 / 失败 + error）
+ *   - onDone:      收到 done 帧；payload = {full?, sessionId?}
+ *   - onError:     解析 / 网络错误（已忽略 AbortError）
+ *
+ * 任一 callback 缺省（undefined）都不会被调用，不抛错。
  */
+export interface SendChatStreamOptions {
+  onChunk?: (chunk: string) => void
+  onPrefix?: (content: string) => void
+  onContext?: (info: ChatContextInfo) => void
+  onTool?: (toolCall: ChatToolCall) => void
+  onResource?: (resource: ChatAttachment) => void
+  onMemory?: (info: ChatMemoryResult) => void
+  onDone?: (payload: { full?: string; sessionId?: string }) => void
+  onError?: (error: Error) => void
+}
+
 export function sendChatMessageStream(
   payload: ChatRequest,
-  onChunk: (chunk: string) => void,
-  onDone: () => void,
-  onError: (error: Error) => void,
-  onImageUrl?: (imageUrl: string) => void,
-  onAttachments?: (attachments: ChatAttachment[]) => void,
+  options: SendChatStreamOptions = {},
 ): AbortController {
+  const {
+    onChunk,
+    onPrefix,
+    onContext,
+    onTool,
+    onResource,
+    onMemory,
+    onDone,
+    onError,
+  } = options
   const controller = new AbortController()
   const baseURL = import.meta.env.VITE_API_BASE_URL || '/api'
   const url = `${baseURL}/chat`
@@ -157,72 +331,45 @@ export function sendChatMessageStream(
       }
 
       const contentType = response.headers.get('content-type') || ''
-      // 部分后端即便声明 SSE 也会一次性返回 JSON；优先按 SSE 处理，但保留 JSON 兜底
+      // 非流式 JSON 兜底：stream=false 时一次性返回
       if (contentType.includes('application/json') && !contentType.includes('event-stream')) {
         const data = await response.json()
-        const reply =
-          (data as { data?: { reply?: string; imageUrl?: string; attachments?: RawAttachment[] } }).data?.reply ?? ''
-        const imageUrl = (data as { data?: { imageUrl?: string } }).data?.imageUrl
-        const attachments = normalizeAttachments(
-          (data as { data?: { attachments?: RawAttachment[] } }).data?.attachments,
-        )
-        if (reply) onChunk(reply)
-        if (imageUrl) onImageUrl?.(imageUrl)
-        if (attachments.length) onAttachments?.(attachments)
-        onDone()
+        const events = (data as { events?: Array<Record<string, unknown>> }).events ?? []
+        for (const ev of events) {
+          dispatchByType(ev, options)
+        }
+        onDone?.({ full: (data as { full?: string }).full })
         return
       }
 
       const reader = response.body?.getReader()
       if (!reader) {
         console.warn('[sse] response.body is null, treat as done')
-        onDone()
+        onDone?.({})
         return
       }
       const decoder = new TextDecoder('utf-8')
       const sse = makeSseBuffer()
       let receivedAny = false
       let frameCount = 0
+      let finished = false
+
+      const wrap: WrapHandlers = { ...options, markFinished: () => (finished = true) }
 
       try {
-        let finished = false
         while (true) {
           const { done, value } = await reader.read()
           if (done) {
-            // 收尾：把 buffer 残余帧吐出来（兼容服务器未以 \n\n 收尾的情况）
             const tail = sse.flush()
-            for (const f of tail) {
-              handleFrame(
-                f,
-                onChunk,
-                onImageUrl,
-                onAttachments,
-                () => {
-                  finished = true
-                },
-                () => (receivedAny = true),
-              )
-            }
             frameCount += tail.length
+            for (const f of tail) handleFrame(f, wrap, () => (receivedAny = true))
             break
           }
           const text = decoder.decode(value, { stream: true })
           if (text) {
             const frames = sse.push(text)
             frameCount += frames.length
-            for (const f of frames) {
-              handleFrame(
-                f,
-                onChunk,
-                onImageUrl,
-                onAttachments,
-                () => {
-                  finished = true
-                },
-                () => (receivedAny = true),
-              )
-            }
-            // 后端发 finish 帧就算结束，不再等流关闭
+            for (const f of frames) handleFrame(f, wrap, () => (receivedAny = true))
             if (finished) break
           }
         }
@@ -239,7 +386,7 @@ export function sendChatMessageStream(
           /* ignore */
         }
       }
-      onDone()
+      onDone?.({})
     })
     .catch((error) => {
       if (error?.name === 'AbortError') {
@@ -247,190 +394,140 @@ export function sendChatMessageStream(
         return
       }
       console.warn('[sse] error: %s', error?.message ?? String(error))
-      onError(error instanceof Error ? error : new Error(String(error)))
+      onError?.(error instanceof Error ? error : new Error(String(error)))
     })
 
   return controller
 }
 
+/* ========================================================================
+ * 单帧处理：只看 data.type 分发
+ * ====================================================================== */
+
+interface WrapHandlers extends SendChatStreamOptions {
+  markFinished?: () => void
+}
+
 /**
- * 后端可能给到的附件原始结构（命名空间宽松，容错缺失字段）。
- * 协议上每条 attachment 至少包含 { name, url }；其他字段（mimeType / size /
- * type）可选；缺 id 时前端按 url+name 自建。
- */
-type RawAttachment = {
-  id?: string
-  name?: string
-  url?: string
-  mimeType?: string
-  mime_type?: string
-  size?: number
-  type?: 'image' | 'file'
-}
-
-/** 把后端传来的原始 attachment 规整为 ChatAttachment；空 / 非法项过滤掉 */
-function normalizeAttachments(raw: unknown): ChatAttachment[] {
-  if (!Array.isArray(raw)) return []
-  const out: ChatAttachment[] = []
-  for (const item of raw) {
-    if (!item || typeof item !== 'object') continue
-    const r = item as RawAttachment
-    const url = typeof r.url === 'string' ? r.url.trim() : ''
-    if (!url) continue
-    const name = (typeof r.name === 'string' && r.name.trim()) || url.split('/').pop() || '附件'
-    const mimeType = r.mimeType ?? r.mime_type
-    const size = typeof r.size === 'number' ? r.size : undefined
-    // type 字段缺省时按 mimeType 前缀推断
-    const inferred: 'image' | 'file' | undefined =
-      r.type === 'image' || r.type === 'file'
-        ? r.type
-        : mimeType?.toLowerCase().startsWith('image/')
-        ? 'image'
-        : undefined
-    out.push({
-      id: r.id || `${url}#${name}`,
-      name,
-      url,
-      mimeType,
-      size,
-      type: inferred,
-      createdAt: Date.now(),
-    })
-  }
-  return out
-}
-
-/** 单帧处理：完成判定 + 内容提取 + 上报。
- * 兼容三种后端协议：
- *   1. OpenAI 风格（默认事件 / 无 event:）：
- *      data: {"choices":[{"delta":{"content":"..."}}]}
- *   2. 实际后端 event 风格：
- *      event: start   data: {"sessionId":"..."}
- *      event: delta   data: {"delta":"增量片段","reply":"累积文本","attachments":[...]}
- *      event: finish  data: {"reply":"完整文本","sessionId":"...","attachments":[...]}
- *   3. 老式 JSON 包络：{data:{reply, imageUrl, attachments}}
+ * 单帧处理：按 data.type 分发到对应 callback。
  *
- * 关键：finish 帧**不**调用 onChunk，避免与已累积的 delta 文本重复。
- * attachments 在 delta / finish / 老式包络里都会解析并透传给 onAttachments。 */
+ * 关键点：
+ *   - delta 只读 text 字段，避免重复拼接
+ *   - done 帧只用 full/sessionId，**不再**追加到文本（delta 已实时拼好）
+ *   - resource 单条触发；去重在调用方（store）按 file_id+chunk_index 处理
+ */
 function handleFrame(
   frame: SseFrame,
-  onChunk: (chunk: string) => void,
-  onImageUrl: ((imageUrl: string) => void) | undefined,
-  onAttachments: ((attachments: ChatAttachment[]) => void) | undefined,
-  onFinish: ((payload: { reply?: string; sessionId?: string }) => void) | undefined,
+  h: WrapHandlers,
   markReceived: () => void,
 ) {
   const data = frame.data.trim()
-  const event = frame.event
-
-  // OpenAI 风格的结束哨兵
-  if (data === '[DONE]') return
-
-  // 没有任何 payload 时，仅当是 start 这种"握手帧"打日志即可
-  if (!data) {
-    if (event === 'start') console.info('[sse] ← event=start')
-    return
-  }
+  if (!data) return
   markReceived()
 
-  // ----- 实际后端的 event 风格 -----
-  if (event === 'delta' || event === 'message') {
-    if (data.startsWith('{')) {
-      try {
-        const parsed = JSON.parse(data) as {
-          choices?: Array<{ delta?: { content?: string } }>
-          delta?: string
-          reply?: string
-          imageUrl?: string
-          sessionId?: string
-          attachments?: RawAttachment[]
-          data?: { reply?: string; imageUrl?: string; attachments?: RawAttachment[] }
-        }
-        const oaContent = parsed.choices?.[0]?.delta?.content
-        if (typeof oaContent === 'string' && oaContent) {
-          onChunk(oaContent)
-        } else {
-          // 实际后端：取 delta 增量；若只有 reply 字段也作为增量（兼容老格式）
-          const inc = parsed.delta ?? parsed.reply
-          if (typeof inc === 'string' && inc) {
-            onChunk(inc)
-          }
-        }
-        if (parsed.imageUrl && onImageUrl) onImageUrl(parsed.imageUrl)
-        emitAttachments(parsed.attachments, onAttachments)
-        return
-      } catch {
-        // 非法 JSON：落到下方纯文本兜底
-      }
-    }
-    onChunk(extractDeltaContent(data))
+  // OpenAI 风格 [DONE] 哨兵（向后兼容）
+  if (data === '[DONE]') {
+    h.markFinished?.()
     return
   }
 
-  if (event === 'start') {
-    console.info('[sse] ← event=start, data=%s', data.slice(0, 80))
+  const obj = safeJsonParse(data)
+  if (!obj) {
+    // 非法 JSON 静默丢弃，避免把整段 data 当文本喷到 UI
+    console.warn('[sse] ← non-JSON frame dropped: %s', data.slice(0, 80))
     return
   }
 
-  if (event === 'finish' || event === 'done' || event === 'complete') {
-    // 关键：finish 帧只用作结束信号，**不再追加 reply**，
-    // 否则 delta 已拼好全文，再追加一次就会出现重复文本。
-    let payload: { reply?: string; sessionId?: string } | undefined
-    let attachments: ChatAttachment[] = []
-    if (data.startsWith('{')) {
-      try {
-        const parsed = JSON.parse(data) as {
-          reply?: string
-          sessionId?: string
-          attachments?: RawAttachment[]
-        }
-        payload = { reply: parsed.reply, sessionId: parsed.sessionId }
-        attachments = normalizeAttachments(parsed.attachments)
-      } catch {
-        /* ignore */
-      }
-    }
-    console.info(
-      '[sse] ← event=finish, hasReply=%s, attachments=%d',
-      Boolean(payload?.reply),
-      attachments.length,
-    )
-    if (attachments.length) onAttachments?.(attachments)
-    onFinish?.(payload ?? {})
-    return
-  }
+  const type = typeof obj.type === 'string' ? obj.type : ''
 
-  // 未知 / 默认事件类型：尝试 OpenAI 包络 → 老式 JSON 包络 → 纯文本
-  if (data.startsWith('{')) {
-    try {
-      const parsed = JSON.parse(data) as {
-        choices?: Array<{ delta?: { content?: string } }>
-        data?: { reply?: string; imageUrl?: string; attachments?: RawAttachment[] }
-        attachments?: RawAttachment[]
+  switch (type) {
+    case 'context': {
+      const info = parseContextInfo(data)
+      if (info) {
+        console.info(
+          '[sse] ← context, persona=%d, core=%d, l1=%d',
+          info.personaLen,
+          info.coreCount,
+          info.l1Count,
+        )
+        h.onContext?.(info)
       }
-      if (parsed.choices?.[0]?.delta?.content) {
-        onChunk(parsed.choices[0].delta.content)
-        return
-      }
-      if (parsed.data?.reply) onChunk(parsed.data.reply)
-      if (parsed.data?.imageUrl && onImageUrl) onImageUrl(parsed.data.imageUrl)
-      // attachments 既可能在顶层，也可能在 data.* 里（老式包络）
-      const rawAtts = parsed.attachments ?? parsed.data?.attachments
-      emitAttachments(rawAtts, onAttachments)
       return
-    } catch {
-      /* fallthrough */
+    }
+    case 'resource': {
+      const r = parseResource(data)
+      if (r) {
+        console.info(
+          '[sse] ← resource, modality=%s, fileId=%s, chunk=%d/%d, name=%s',
+          r.modality,
+          r.fileId,
+          r.chunkIndex,
+          r.totalChunks,
+          r.name,
+        )
+        h.onResource?.(r)
+      } else {
+        console.warn('[sse] ← resource frame missing url: %s', data.slice(0, 80))
+      }
+      return
+    }
+    case 'tool': {
+      const tc = parseToolCall(data)
+      if (tc) {
+        console.info('[sse] ← tool, name=%s, iter=%d, ok=%s', tc.name, tc.iter, tc.ok)
+        h.onTool?.(tc)
+      }
+      return
+    }
+    case 'prefix': {
+      const text = extractText(obj)
+      if (text) {
+        console.info('[sse] ← prefix, len=%d', text.length)
+        h.onPrefix?.(text)
+      }
+      return
+    }
+    case 'delta': {
+      const text = extractText(obj)
+      if (text) {
+        h.onChunk?.(text)
+      }
+      return
+    }
+    case 'done': {
+      const p = parseDonePayload(data)
+      console.info(
+        '[sse] ← done, fullLen=%d, sessionId=%s',
+        p.full?.length ?? 0,
+        p.sessionId ?? '',
+      )
+      // 调用方拿 full 做完整性校验；不再追加，避免与 delta 重复
+      h.onDone?.(p)
+      h.markFinished?.()
+      return
+    }
+    case 'memory_extracted': {
+      const m = parseMemoryResult(data)
+      if (m) {
+        console.info('[sse] ← memory_extracted, ok=%s', m.ok)
+        h.onMemory?.(m)
+      }
+      return
+    }
+    default: {
+      // 未知 type：静默丢弃（避免把整段 JSON 当文本喷到 UI）
+      console.warn('[sse] ← unknown type=%s, dropped', type || '(empty)')
     }
   }
-  onChunk(extractDeltaContent(data))
 }
 
-/** 把原始附件数组规整后透传给上游；空数组直接跳过，避免无谓回调 */
-function emitAttachments(
-  raw: RawAttachment[] | undefined,
-  onAttachments: ((attachments: ChatAttachment[]) => void) | undefined,
-) {
-  if (!onAttachments) return
-  const list = normalizeAttachments(raw)
-  if (list.length) onAttachments(list)
+/** 非流式 JSON 响应里的 events[] 复用同款分发逻辑 */
+function dispatchByType(ev: Record<string, unknown>, opts: SendChatStreamOptions) {
+  const wrap: WrapHandlers = { ...opts }
+  // 伪造一帧走 handleFrame（仅 data 字段）
+  const frame: SseFrame = {
+    event: 'message',
+    data: JSON.stringify(ev),
+  }
+  handleFrame(frame, wrap, () => {})
 }

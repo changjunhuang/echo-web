@@ -1,8 +1,12 @@
-// 单元测试：附件解析（src/api/chat.ts 的 normalizeAttachments / emitAttachments）
+// 单元测试：新协议下 resource 事件归一化为 ChatAttachment
 // 跑：`node --test test/chat-attachment.test.mjs`
 //
-// 目的：验证 handleFrame 能在 delta / finish / 老式 JSON 包络三种位置
-//       提取出 attachments，并按预期回调到 onAttachments 上。
+// 覆盖目标：
+//   1. resource 帧 → onResource 收到规范化的 ChatAttachment
+//   2. modality 派发：image / audio / video / file
+//   3. file_id + chunk_index 兜底为 id
+//   4. 缺 url 的非法资源被静默丢弃
+//   5. resolveUrl 把裸域名补成 https://
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
@@ -14,15 +18,16 @@ function makeSseBuffer() {
   let buffer = ''
   return {
     push(chunk) {
-      buffer += chunk.replace(/\r\n/g, '\n').replace(/(?<!\n)\r/g, '\n')
+      buffer += chunk
       const out = []
-      let sepIndex = buffer.indexOf('\n\n')
+      let sepIndex = findEventSeparator(buffer)
       while (sepIndex !== -1) {
+        const sepLen = separatorLength(buffer, sepIndex)
         const event = buffer.slice(0, sepIndex)
-        buffer = buffer.slice(sepIndex + 2)
+        buffer = buffer.slice(sepIndex + sepLen)
         const frame = parseSseEvent(event)
         if (frame) out.push(frame)
-        sepIndex = buffer.indexOf('\n\n')
+        sepIndex = findEventSeparator(buffer)
       }
       return out
     },
@@ -39,6 +44,24 @@ function makeSseBuffer() {
   }
 }
 
+function findEventSeparator(buf) {
+  const i1 = buf.indexOf('\n\n')
+  if (i1 !== -1) return i1
+  const i2 = buf.indexOf('\r\n\r\n')
+  if (i2 !== -1) return i2
+  const i3 = buf.indexOf('\n\r\n')
+  if (i3 !== -1) return i3
+  return buf.indexOf('\r\n\n')
+}
+
+function separatorLength(buf, idx) {
+  if (buf.startsWith('\n\n', idx)) return 2
+  if (buf.startsWith('\r\n\r\n', idx)) return 4
+  if (buf.startsWith('\n\r\n', idx)) return 3
+  if (buf.startsWith('\r\n\n', idx)) return 3
+  return 2
+}
+
 function parseSseEvent(eventText) {
   let eventName = 'message'
   const dataLines = []
@@ -53,108 +76,66 @@ function parseSseEvent(eventText) {
     if (field === 'event') eventName = value || 'message'
     else if (field === 'data') dataLines.push(value)
   }
-  if (dataLines.length === 0 && eventName === 'message') return null
+  if (dataLines.length === 0) return null
   return { event: eventName, data: dataLines.join('\n') }
 }
 
-function normalize(raw) {
-  if (!Array.isArray(raw)) return []
-  const out = []
-  for (const item of raw) {
-    if (!item || typeof item !== 'object') continue
-    const url = typeof item.url === 'string' ? item.url.trim() : ''
-    if (!url) continue
-    const name =
-      (typeof item.name === 'string' && item.name.trim()) ||
-      url.split('/').pop() ||
-      '附件'
-    const mimeType = item.mimeType ?? item.mime_type
-    const size = typeof item.size === 'number' ? item.size : undefined
-    const type =
-      item.type === 'image' || item.type === 'file'
-        ? item.type
-        : mimeType?.toLowerCase().startsWith('image/')
-        ? 'image'
-        : undefined
-    out.push({
-      id: item.id || `${url}#${name}`,
-      name,
-      url,
-      mimeType,
-      size,
-      type,
-    })
+function safeJson(s) {
+  const t = s.trim()
+  if (!t || !t.startsWith('{')) return null
+  try {
+    const p = JSON.parse(t)
+    return p && typeof p === 'object' ? p : null
+  } catch {
+    return null
   }
-  return out
 }
 
-function handleFrame(frame, onChunk, onImageUrl, onAttachments, onFinish, markReceived) {
+function parseResource(data) {
+  const obj = safeJson(data)
+  if (!obj) return null
+  const url = typeof obj.url === 'string' ? obj.url.trim() : ''
+  if (!url) return null
+  const name =
+    (typeof obj.display_name === 'string' && obj.display_name.trim()) ||
+    (typeof obj.name === 'string' && obj.name.trim()) ||
+    url.split('/').pop() ||
+    '附件'
+  const modality =
+    obj.modality === 'image' || obj.modality === 'audio' || obj.modality === 'video' || obj.modality === 'file'
+      ? obj.modality
+      : 'file'
+  return {
+    id: typeof obj.event_id === 'string' && obj.event_id
+      ? obj.event_id
+      : `${typeof obj.file_id === 'string' ? obj.file_id : url}#${obj.chunk_index ?? 0}`,
+    name,
+    displayName: typeof obj.display_name === 'string' ? obj.display_name : name,
+    url,
+    fileId: typeof obj.file_id === 'string' ? obj.file_id : undefined,
+    modality,
+    mimeType: typeof obj.mime_type === 'string' ? obj.mime_type : undefined,
+    chunkIndex: typeof obj.chunk_index === 'number' ? obj.chunk_index : 0,
+    totalChunks: typeof obj.total_chunks === 'number' ? obj.total_chunks : 1,
+    sizeBytes: typeof obj.size_bytes === 'number' ? obj.size_bytes : undefined,
+    similarity: typeof obj.similarity === 'number' ? obj.similarity : undefined,
+    source: typeof obj.source === 'string' ? obj.source : undefined,
+    iter: typeof obj.iter === 'number' ? obj.iter : undefined,
+  }
+}
+
+function handleFrame(frame, opts) {
   const data = frame.data.trim()
-  const event = frame.event
+  if (!data) return
   if (data === '[DONE]') return
-  if (!data) {
-    if (event === 'start') console.info('[sse] ← event=start')
-    return
+  const obj = safeJson(data)
+  if (!obj) return
+  const type = typeof obj.type === 'string' ? obj.type : ''
+  if (type === 'resource') {
+    const r = parseResource(data)
+    if (r) opts.onResource?.(r)
   }
-  markReceived()
-
-  if (event === 'delta' || event === 'message') {
-    if (data.startsWith('{')) {
-      try {
-        const parsed = JSON.parse(data)
-        const oa = parsed.choices?.[0]?.delta?.content
-        if (typeof oa === 'string' && oa) {
-          onChunk(oa)
-        } else {
-          const inc = parsed.delta ?? parsed.reply
-          if (typeof inc === 'string' && inc) onChunk(inc)
-        }
-        if (parsed.imageUrl && onImageUrl) onImageUrl(parsed.imageUrl)
-        const list = normalize(parsed.attachments)
-        if (list.length && onAttachments) onAttachments(list)
-        return
-      } catch {
-        /* fallthrough */
-      }
-    }
-    return
-  }
-
-  if (event === 'start') return
-  if (event === 'finish' || event === 'done' || event === 'complete') {
-    let payload
-    let list = []
-    if (data.startsWith('{')) {
-      try {
-        const parsed = JSON.parse(data)
-        payload = { reply: parsed.reply, sessionId: parsed.sessionId }
-        list = normalize(parsed.attachments)
-      } catch {
-        /* ignore */
-      }
-    }
-    if (list.length && onAttachments) onAttachments(list)
-    onFinish?.(payload ?? {})
-    return
-  }
-
-  if (data.startsWith('{')) {
-    try {
-      const parsed = JSON.parse(data)
-      if (parsed.choices?.[0]?.delta?.content) {
-        onChunk(parsed.choices[0].delta.content)
-        return
-      }
-      if (parsed.data?.reply) onChunk(parsed.data.reply)
-      if (parsed.data?.imageUrl && onImageUrl) onImageUrl(parsed.data.imageUrl)
-      const raw = parsed.attachments ?? parsed.data?.attachments
-      const list = normalize(raw)
-      if (list.length && onAttachments) onAttachments(list)
-      return
-    } catch {
-      /* fallthrough */
-    }
-  }
+  // 其他事件类型与本测试无关
 }
 
 function runFrames(sseText) {
@@ -162,204 +143,164 @@ function runFrames(sseText) {
   const chunks = []
   let pos = 0
   while (pos < sseText.length) {
-    const step = Math.min(sseText.length - pos, 1 + (pos % 7))
-    const slice = sseText.slice(pos, pos + step)
+    const step = Math.min(sseText.length - pos, 4)
+    chunks.push(...buf.push(sseText.slice(pos, pos + step)))
     pos += step
-    for (const f of buf.push(slice)) chunks.push(f)
   }
-  for (const f of buf.flush()) chunks.push(f)
+  chunks.push(...buf.flush())
   return chunks
 }
 
 // ---------------------------------------------------------------------------
-// 1. delta 帧里带 attachments → 应能提取出来
+// 1. resource 帧解析：完整字段
 // ---------------------------------------------------------------------------
 
-test('delta 帧携带 attachments（顶层数组）应被解析', () => {
-  const sse = [
-    'event: start\r\n',
-    'data: {"sessionId":"s1"}\r\n',
-    '\r\n',
-    'event: delta\r\n',
-    'data: {"delta":"文件如下：","reply":"文件如下：","attachments":[' +
-      '{"id":"a1","name":"report.pdf","url":"https://x.com/r.pdf","mimeType":"application/pdf","size":12345,"type":"file"},' +
-      '{"id":"a2","name":"cat.png","url":"https://x.com/c.png","mimeType":"image/png","size":6789,"type":"image"}' +
-      ']}\r\n',
-    '\r\n',
-    'event: finish\r\n',
-    'data: {"reply":"文件如下：","sessionId":"s1"}\r\n',
-    '\r\n',
-  ].join('')
-
-  const frames = runFrames(sse)
-  const calls = []
-  for (const f of frames) {
-    handleFrame(
-      f,
-      () => {},
-      undefined,
-      (list) => calls.push(...list),
-      undefined,
-      () => {},
-    )
-  }
-  assert.equal(calls.length, 2)
-  assert.equal(calls[0].id, 'a1')
-  assert.equal(calls[0].name, 'report.pdf')
-  assert.equal(calls[0].type, 'file') // 非 image/*
-  assert.equal(calls[0].size, 12345)
-  assert.equal(calls[1].id, 'a2')
-  assert.equal(calls[1].type, 'image') // image/* 自动推断
-})
-
-// ---------------------------------------------------------------------------
-// 2. finish 帧里也带 attachments → 应能提取
-// ---------------------------------------------------------------------------
-
-test('finish 帧携带 attachments 应被解析', () => {
-  const sse = [
-    'event: delta\r\n',
-    'data: {"delta":"hi"}\r\n',
-    '\r\n',
-    'event: finish\r\n',
-    'data: {"reply":"hi","attachments":[{"name":"a.txt","url":"https://x.com/a.txt"}]}\r\n',
-    '\r\n',
-  ].join('')
-  const frames = runFrames(sse)
-  const calls = []
-  for (const f of frames) {
-    handleFrame(
-      f,
-      () => {},
-      undefined,
-      (list) => calls.push(...list),
-      () => {},
-      () => {},
-    )
-  }
-  assert.equal(calls.length, 1)
-  assert.equal(calls[0].name, 'a.txt')
-  assert.equal(calls[0].url, 'https://x.com/a.txt')
-  assert.ok(calls[0].id) // 自动生成 id
-})
-
-// ---------------------------------------------------------------------------
-// 3. 老式 JSON 包络：attachments 在 data.* 里
-//    用一个非标准 event 名（legacy）触发"未知事件"分支，
-//    该分支专门负责从 data.* 老式包络里抽 reply / attachments
-// ---------------------------------------------------------------------------
-
-test('老式包络 data.attachments 应被解析', () => {
+test('resource 帧：图片 → 完整 ChatAttachment', () => {
   const sse =
-    'event: legacy\n' +
-    'data: {"data":{"reply":"ok","attachments":[{"name":"pic.png","url":"https://x.com/p.png","mimeType":"image/png"}]}}\n\n' +
-    'data: [DONE]\n\n'
+    'data: {"type":"resource","event_id":"a1b2c3d4e5f67890a1b2c3d4e5f67890","url":"cdn.example.com/lab.jpg","name":"拉布拉多.jpg","display_name":"拉布拉多.jpg","file_id":"F-1024","modality":"image","mime_type":"image/jpeg","chunk_index":0,"total_chunks":1,"size_bytes":248532,"similarity":0.4218,"source":"search_memory","iter":0}\n\n'
   const frames = runFrames(sse)
   const calls = []
-  let text = ''
-  for (const f of frames) {
-    handleFrame(
-      f,
-      (c) => (text += c),
-      undefined,
-      (list) => calls.push(...list),
-      undefined,
-      () => {},
-    )
-  }
-  assert.equal(text, 'ok')
+  for (const f of frames) handleFrame(f, { onResource: (r) => calls.push(r) })
   assert.equal(calls.length, 1)
-  assert.equal(calls[0].type, 'image')
+  const r = calls[0]
+  assert.equal(r.id, 'a1b2c3d4e5f67890a1b2c3d4e5f67890')
+  assert.equal(r.fileId, 'F-1024')
+  assert.equal(r.modality, 'image')
+  assert.equal(r.mimeType, 'image/jpeg')
+  assert.equal(r.name, '拉布拉多.jpg')
+  assert.equal(r.displayName, '拉布拉多.jpg')
+  assert.equal(r.chunkIndex, 0)
+  assert.equal(r.totalChunks, 1)
+  assert.equal(r.sizeBytes, 248532)
+  assert.equal(r.similarity, 0.4218)
+  assert.equal(r.source, 'search_memory')
+  assert.equal(r.iter, 0)
 })
 
 // ---------------------------------------------------------------------------
-// 4. 非法 / 缺 url 的 attachment 应被过滤
+// 2. modality 派发
 // ---------------------------------------------------------------------------
 
-test('缺 url 的非法 attachment 应被过滤掉', () => {
-  const sse = [
-    'event: delta\r\n',
-    'data: {"attachments":[{"name":"valid.png","url":"https://x.com/v.png"},' +
-      '{"name":"no-url"},{"url":""},null,"oops"]}\r\n',
-    '\r\n',
-  ].join('')
-  const frames = runFrames(sse)
+test('resource 帧：音频 modality', () => {
+  const sse = 'data: {"type":"resource","url":"cdn.example.com/v.m4a","modality":"audio","mime_type":"audio/mp4"}\n\n'
   const calls = []
-  for (const f of frames) {
-    handleFrame(
-      f,
-      () => {},
-      undefined,
-      (list) => calls.push(...list),
-      undefined,
-      () => {},
-    )
-  }
-  assert.equal(calls.length, 1)
-  assert.equal(calls[0].name, 'valid.png')
+  for (const f of runFrames(sse)) handleFrame(f, { onResource: (r) => calls.push(r) })
+  assert.equal(calls[0].modality, 'audio')
 })
 
-// ---------------------------------------------------------------------------
-// 5. 字段命名空间宽松：mime_type 也应被识别
-// ---------------------------------------------------------------------------
-
-test('后端把 mimeType 写成 mime_type 也能被解析', () => {
-  const sse = [
-    'event: finish\r\n',
-    'data: {"attachments":[{"name":"x","url":"https://x.com/x","mime_type":"image/jpeg","size":99}]}\r\n',
-    '\r\n',
-  ].join('')
-  const frames = runFrames(sse)
+test('resource 帧：视频 modality', () => {
+  const sse = 'data: {"type":"resource","url":"cdn.example.com/v.mp4","modality":"video","mime_type":"video/mp4"}\n\n'
   const calls = []
-  for (const f of frames) {
-    handleFrame(
-      f,
-      () => {},
-      undefined,
-      (list) => calls.push(...list),
-      () => {},
-      () => {},
-    )
-  }
+  for (const f of runFrames(sse)) handleFrame(f, { onResource: (r) => calls.push(r) })
+  assert.equal(calls[0].modality, 'video')
+})
+
+test('resource 帧：缺 modality → 兜底为 file', () => {
+  const sse = 'data: {"type":"resource","url":"cdn.example.com/x.pdf"}\n\n'
+  const calls = []
+  for (const f of runFrames(sse)) handleFrame(f, { onResource: (r) => calls.push(r) })
+  assert.equal(calls[0].modality, 'file')
+})
+
+// ---------------------------------------------------------------------------
+// 3. 缺 url 的非法 resource 应被过滤
+// ---------------------------------------------------------------------------
+
+test('缺 url 的非法 resource 应被过滤掉', () => {
+  const sse =
+    'data: {"type":"resource","name":"valid.jpg","url":"cdn.example.com/v.jpg"}\n\n' +
+    'data: {"type":"resource","name":"no-url"}\n\n' +
+    'data: {"type":"resource","url":""}\n\n'
+  const calls = []
+  for (const f of runFrames(sse)) handleFrame(f, { onResource: (r) => calls.push(r) })
   assert.equal(calls.length, 1)
-  assert.equal(calls[0].mimeType, 'image/jpeg')
-  assert.equal(calls[0].type, 'image')
+  assert.equal(calls[0].name, 'valid.jpg')
 })
 
 // ---------------------------------------------------------------------------
-// 6. 没有 onAttachments 回调时也不应抛错
+// 4. id 兜底：缺 event_id 时用 fileId+chunkIndex
 // ---------------------------------------------------------------------------
 
-test('onAttachments 为 undefined 时不抛错', () => {
-  const sse = [
-    'event: delta\r\n',
-    'data: {"attachments":[{"name":"x","url":"https://x.com/x"}]}\r\n',
-    '\r\n',
-  ].join('')
-  const frames = runFrames(sse)
-  for (const f of frames) {
-    handleFrame(f, () => {}, undefined, undefined, undefined, () => {})
+test('缺 event_id：用 file_id + chunk_index 兜底为 id', () => {
+  const sse = 'data: {"type":"resource","url":"cdn.example.com/x.jpg","file_id":"F-7","chunk_index":2,"total_chunks":5}\n\n'
+  const calls = []
+  for (const f of runFrames(sse)) handleFrame(f, { onResource: (r) => calls.push(r) })
+  assert.equal(calls[0].id, 'F-7#2')
+  assert.equal(calls[0].chunkIndex, 2)
+  assert.equal(calls[0].totalChunks, 5)
+})
+
+// ---------------------------------------------------------------------------
+// 5. display_name 缺省时退到 name
+// ---------------------------------------------------------------------------
+
+test('缺 display_name：用 name 兜底为 displayName', () => {
+  const sse = 'data: {"type":"resource","url":"cdn.example.com/x.jpg","name":"only-name.jpg"}\n\n'
+  const calls = []
+  for (const f of runFrames(sse)) handleFrame(f, { onResource: (r) => calls.push(r) })
+  assert.equal(calls[0].name, 'only-name.jpg')
+  assert.equal(calls[0].displayName, 'only-name.jpg')
+})
+
+// ---------------------------------------------------------------------------
+// 6. resolveUrl：URL 处理
+// ---------------------------------------------------------------------------
+
+test('resolveUrl：已带 https 不动', () => {
+  function resolveUrl(url, proto = 'https:') {
+    if (!url) return url
+    if (/^https?:\/\//i.test(url)) return url
+    if (url.startsWith('//')) return `${proto}${url}`
+    return `${proto}//${url}`
   }
-  // 不抛错即通过
-  assert.ok(true)
+  assert.equal(resolveUrl('https://cdn.example.com/a.jpg'), 'https://cdn.example.com/a.jpg')
+  assert.equal(resolveUrl('http://cdn.example.com/a.jpg'), 'http://cdn.example.com/a.jpg')
 })
 
-// ---------------------------------------------------------------------------
-// 7. 源文件契约：handleFrame 透传 onAttachments，组件 ChatAttachment.vue 存在
-// ---------------------------------------------------------------------------
+test('resolveUrl：协议相对 //', () => {
+  function resolveUrl(url, proto = 'https:') {
+    if (!url) return url
+    if (/^https?:\/\//i.test(url)) return url
+    if (url.startsWith('//')) return `${proto}${url}`
+    return `${proto}//${url}`
+  }
+  assert.equal(resolveUrl('//cdn.example.com/a.jpg'), 'https://cdn.example.com/a.jpg')
+})
 
-test('chat.ts 把 onAttachments 一路传进 handleFrame', async () => {
-  const src = await readFile(new URL('../src/api/chat.ts', import.meta.url), 'utf-8')
-  assert.ok(src.includes('onAttachments?'), 'sendChatMessageStream 应暴露 onAttachments 可选参数')
-  assert.ok(
-    src.includes('onAttachments: ((attachments: ChatAttachment[]) => void) | undefined'),
-    'handleFrame 应接收 onAttachments',
+test('resolveUrl：裸域名', () => {
+  function resolveUrl(url, proto = 'https:') {
+    if (!url) return url
+    if (/^https?:\/\//i.test(url)) return url
+    if (url.startsWith('//')) return `${proto}${url}`
+    return `${proto}//${url}`
+  }
+  // 这是 spec 里的关键回归：绝不能让 <img src="cdn.example.com/foo.jpg"> 落到相对路径
+  assert.equal(resolveUrl('cdn.example.com/foo.jpg'), 'https://cdn.example.com/foo.jpg')
+  assert.equal(
+    resolveUrl('the04ztre.hn-bkt.clouddn.com/default/20260629/lab.jpg'),
+    'https://the04ztre.hn-bkt.clouddn.com/default/20260629/lab.jpg',
   )
-  assert.ok(src.includes('emitAttachments'), '应有 emitAttachments 收口函数')
-  assert.ok(src.includes('normalizeAttachments'), '应有 normalizeAttachments 规整函数')
 })
 
-test('ChatAttachment.vue 存在并暴露 attachments prop', async () => {
+// ---------------------------------------------------------------------------
+// 7. 源文件契约
+// ---------------------------------------------------------------------------
+
+test('chat.ts：暴露 onResource 回调', async () => {
+  const src = await readFile(new URL('../src/api/chat.ts', import.meta.url), 'utf-8')
+  assert.ok(src.includes('onResource?'), 'SendChatStreamOptions 应暴露 onResource')
+  assert.ok(
+    src.includes('onResource?: (resource: ChatAttachment) => void'),
+    'SendChatStreamOptions.onResource 签名应正确',
+  )
+})
+
+test('chat.ts：导出 resolveUrl', async () => {
+  const src = await readFile(new URL('../src/api/chat.ts', import.meta.url), 'utf-8')
+  assert.ok(src.includes('export function resolveUrl'), '应导出 resolveUrl')
+})
+
+test('ChatAttachment.vue 存在并暴露 attachments prop + resolveUrl', async () => {
   const src = await readFile(
     new URL('../src/components/ChatAttachment.vue', import.meta.url),
     'utf-8',
@@ -368,16 +309,26 @@ test('ChatAttachment.vue 存在并暴露 attachments prop', async () => {
   assert.ok(src.includes('attachments: ChatAttachment[]'), '应接 attachments: ChatAttachment[]')
   assert.ok(src.includes('Download'), '应使用 Download 图标')
   assert.ok(src.includes('handleDownload'), '应有 handleDownload 实现')
-  assert.ok(src.includes('inferType'), '应有 inferType 推断函数')
+  // modality 派发
+  for (const m of ['image', 'audio', 'video', 'file']) {
+    assert.ok(src.includes(`modality === '${m}'`), `应派发 modality === ${m}`)
+  }
+  // resolveUrl 调用
+  assert.ok(src.includes('resolve('), '应调用 resolve (resolveUrl 别名)')
 })
 
-test('types/chat.ts 暴露 ChatAttachment 与 Message.attachments', async () => {
+test('types/chat.ts 暴露 ChatAttachment 新字段 + Message.attachments', async () => {
   const src = await readFile(new URL('../src/types/chat.ts', import.meta.url), 'utf-8')
   assert.ok(src.includes('export interface ChatAttachment'), '应导出 ChatAttachment 接口')
-  assert.ok(src.includes('attachments?: ChatAttachment[]'), 'Message 应带 attachments 可选字段')
+  // 新字段
+  for (const f of ['displayName', 'fileId', 'modality', 'chunkIndex', 'totalChunks', 'sizeBytes']) {
+    assert.ok(src.includes(f), `ChatAttachment 应包含 ${f}`)
+  }
+  assert.ok(src.includes("'image' | 'audio' | 'video' | 'file'"), 'modality 应限制四种值')
+  assert.ok(src.includes('attachments?: ChatAttachment[]'), 'Message 应带 attachments 字段')
 })
 
-test('ChatPage.vue 已经引入 ChatAttachment 并渲染', async () => {
+test('ChatPage.vue 已经引入 ChatAttachment 并 onResource 接入 store', async () => {
   const src = await readFile(new URL('../src/views/chat/ChatPage.vue', import.meta.url), 'utf-8')
   assert.ok(
     src.includes("import ChatAttachment from '@/components/ChatAttachment.vue'"),
@@ -385,7 +336,7 @@ test('ChatPage.vue 已经引入 ChatAttachment 并渲染', async () => {
   )
   assert.ok(src.includes('<ChatAttachment'), '应在模板里使用 <ChatAttachment>')
   assert.ok(
-    src.includes('chatStore.appendMessageAttachments(localSessionId, attachments)'),
-    '应把 onAttachments 接到 store',
+    src.includes('chatStore.appendMessageResource(localSessionId, resource)'),
+    '应把 onResource 接到 store',
   )
 })

@@ -1,7 +1,14 @@
 import { defineStore } from 'pinia'
 import { ref, computed, watch } from 'vue'
 import { nanoid } from 'nanoid'
-import type { ChatAttachment, ChatSession, Message } from '@/types/chat'
+import type {
+  ChatAttachment,
+  ChatContextInfo,
+  ChatMemoryResult,
+  ChatSession,
+  ChatToolCall,
+  Message,
+} from '@/types/chat'
 import { getClientIP } from '@/api/chat'
 import { useAuthStore } from '@/stores/auth'
 
@@ -51,11 +58,6 @@ export const useChatStore = defineStore('chat', () => {
    * 实际发送到后端的 sessionId。
    *  - 登录后 = authStore.sessionId（与后端 /api/auth/login 返回值严格一致）
    *  - 未登录 = 退回到 IP 派生的 anonymous sessionId
-   *  - 既未登录又没拿到 IP 时 = 空字符串
-   *
-   * 注意：这个字段才是 ChatPage 写到 payload.sessionId 的值，
-   * 之前是 currentSessionId/defaultSessionId（都是前端自生成），
-   * 跟后端登录返回的 sessionId 对不上 —— 这就是用户报的"前后端 sessionId 不一致"。
    */
   const sessionId = ref<string>(loadPersistedChatSessionId())
 
@@ -81,14 +83,6 @@ export const useChatStore = defineStore('chat', () => {
 
   /**
    * 把外部（通常是 authStore）提供的 authSessionId 同步到 chatStore.sessionId。
-   *  - 传非空值：直接采用（同时落 localStorage，供刷新后首屏用）
-   *  - 传空：清空当前 sessionId，下一次读取会回退到 IP 派生
-   *
-   * 调用时机：
-   *  - authStore.login() 成功后
-   *  - authStore.bootstrap() 完成后（启动恢复）
-   *  - authStore.logout() 后
-   *  - 跨标签页 storage 事件
    */
   function syncSessionId(authSessionId: string) {
     const next = (authSessionId || '').trim()
@@ -96,10 +90,6 @@ export const useChatStore = defineStore('chat', () => {
     persistChatSessionId(next)
   }
 
-  /**
-   * 给"未登录"场景兜底：拿到 IP 派生 sessionId 后写入。
-   * 登录态下不会调用，避免覆盖刚同步进来的 authSessionId。
-   */
   function ensureAnonymousSession() {
     if (sessionId.value) return
     if (defaultSessionId.value) {
@@ -169,26 +159,91 @@ export const useChatStore = defineStore('chat', () => {
   }
 
   /**
-   * 把一批附件追加到指定会话最后一条 assistant 消息上。
-   * - 同 url 视为同一条，按 url 去重（后端在 finish 帧里再回放一次时不会重复添加）
-   * - 历史会话里没有最后一条 assistant 消息时静默丢弃
+   * 追加单条资源到指定会话最后一条 assistant 消息。
+   * 去重键：fileId + chunkIndex（同一资源的多次召回会被合并，保留最新一条）。
+   * 没有 fileId 时退回到 eventId / id。
    */
-  function appendMessageAttachments(sessionId: string, attachments: ChatAttachment[]) {
-    if (!attachments?.length) return
+  function appendMessageResource(sessionId: string, resource: ChatAttachment) {
+    if (!resource) return
     const session = sessions.value.find((s) => s.id === sessionId)
     if (!session) return
     const last = session.messages[session.messages.length - 1]
     if (!last || last.role !== 'assistant') return
     const existing = last.attachments ?? []
-    const knownUrls = new Set(existing.map((a) => a.url))
-    const merged = [...existing]
-    for (const att of attachments) {
-      if (!att?.url) continue
-      if (knownUrls.has(att.url)) continue
-      knownUrls.add(att.url)
-      merged.push(att)
+    const keyOf = (a: ChatAttachment) =>
+      `${a.fileId ?? a.id}#${a.chunkIndex ?? 0}`
+    const newKey = keyOf(resource)
+    const idx = existing.findIndex((a) => keyOf(a) === newKey)
+    let merged: ChatAttachment[]
+    if (idx >= 0) {
+      merged = existing.slice()
+      merged[idx] = resource
+    } else {
+      merged = [...existing, resource]
     }
     last.attachments = merged
+    session.updatedAt = Date.now()
+  }
+
+  /**
+   * 把一批附件追加到指定会话最后一条 assistant 消息上。
+   * - 走 appendMessageResource 同样的去重策略（fileId+chunkIndex）
+   * - 历史会话里没有最后一条 assistant 消息时静默丢弃
+   */
+  function appendMessageAttachments(sessionId: string, attachments: ChatAttachment[]) {
+    if (!attachments?.length) return
+    for (const att of attachments) appendMessageResource(sessionId, att)
+  }
+
+  /**
+   * 追加工具调用记录到指定会话最后一条 assistant 消息。
+   * 去重键：(name, iter, summary) 三元组，避免同一次工具调用被多次回放时重复插入。
+   */
+  function appendMessageToolCalls(sessionId: string, toolCalls: ChatToolCall[]) {
+    if (!toolCalls?.length) return
+    const session = sessions.value.find((s) => s.id === sessionId)
+    if (!session) return
+    const last = session.messages[session.messages.length - 1]
+    if (!last || last.role !== 'assistant') return
+    const existing = last.toolCalls ?? []
+    const seen = new Set(existing.map((t) => stableKeyOfToolCall(t)))
+    const merged = [...existing]
+    for (const tc of toolCalls) {
+      if (!tc) continue
+      const key = stableKeyOfToolCall(tc)
+      if (seen.has(key)) continue
+      seen.add(key)
+      merged.push(tc)
+    }
+    last.toolCalls = merged
+    session.updatedAt = Date.now()
+  }
+
+  /**
+   * 记录 RAG / 检索上下文摘要到指定会话最后一条 assistant 消息。
+   * 新协议只给 persona / core / l1 三个计数，每次都覆盖（后端也只会发一次）。
+   */
+  function appendMessageContext(sessionId: string, info: ChatContextInfo) {
+    if (!info) return
+    const session = sessions.value.find((s) => s.id === sessionId)
+    if (!session) return
+    const last = session.messages[session.messages.length - 1]
+    if (!last || last.role !== 'assistant') return
+    last.context = info
+    session.updatedAt = Date.now()
+  }
+
+  /**
+   * 记录长期记忆抽取结果到指定会话最后一条 assistant 消息。
+   * 覆盖式写入（一次响应通常只有一次 memory_extracted 帧）。
+   */
+  function appendMessageMemoryResult(sessionId: string, result: ChatMemoryResult) {
+    if (!result) return
+    const session = sessions.value.find((s) => s.id === sessionId)
+    if (!session) return
+    const last = session.messages[session.messages.length - 1]
+    if (!last || last.role !== 'assistant') return
+    last.memoryResult = result
     session.updatedAt = Date.now()
   }
 
@@ -200,8 +255,7 @@ export const useChatStore = defineStore('chat', () => {
     }
   }
 
-  // 监听 authStore 变化：登录态切换时自动同步 sessionId。
-  // 用 watch 而不是手动在每个调用点同步，避免漏改。
+  // 监听 authStore 变化：登录态切换时自动同步 sessionId
   const authStore = useAuthStore()
   watch(
     () => authStore.sessionId,
@@ -226,7 +280,19 @@ export const useChatStore = defineStore('chat', () => {
     addMessage,
     appendToLastAssistantMessage,
     setMessageImageUrl,
+    appendMessageResource,
     appendMessageAttachments,
+    appendMessageToolCalls,
+    appendMessageContext,
+    appendMessageMemoryResult,
     clearSession,
   }
 })
+
+/**
+ * 给工具调用生成稳定的去重 key：name + iter + summary 三元组。
+ * 新协议没有 args / result，只用摘要做签名。
+ */
+function stableKeyOfToolCall(tc: ChatToolCall): string {
+  return [tc.name, tc.iter, tc.summary].join('|')
+}

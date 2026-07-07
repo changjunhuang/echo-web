@@ -85,7 +85,16 @@
       "Bash(./test_server_new.exe)",
       "Bash(powershell -Command \"Stop-Process -Id 45052 -Force\")",
       "Bash(powershell -Command \"Stop-Process -Id 44584 -Force\")",
-      "Bash(powershell -Command \"Stop-Process -Id 19680,8352 -Force\")"
+      "Bash(powershell -Command \"Stop-Process -Id 19680,8352 -Force\")",
+      "Bash(node --test test/sse-events.test.mjs)",
+      "Bash(node -e ' *)",
+      "Bash(grep *)",
+      "Bash(node --test test/chat-attachment.test.mjs)",
+      "Bash(node --test test/attachment-e2e.test.mjs)",
+      "Bash(node --import tsx --test test/resource-render.test.mjs)",
+      "Bash(TSX_TSCONFIG_PATH=tsconfig.app.json node --import tsx --test test/resource-render.test.mjs)",
+      "Bash(npx vitest *)",
+      "Bash(node --test test/typewriter-wiring.test.mjs)"
     ]
   }
 }

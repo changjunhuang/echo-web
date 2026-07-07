@@ -218,7 +218,19 @@
                     </div>
                   </div>
                   <!-- 普通文本消息 -->
-                  <div v-else class="message-content" v-html="renderMarkdown(msg.content)" />
+                  <div v-else class="message-content">
+                    <span v-html="renderMarkdown(msg.content)" />
+                    <!--
+                      打字机光标：仅在当前正在流式输出的那条消息上显示。
+                      streamingMessageId 由 handleSend 启动 typewriter 时设定，
+                      done / error / stop 时清空，所以光标自然收起。
+                    -->
+                    <span
+                      v-if="msg.id === streamingMessageId"
+                      class="typing-caret"
+                      aria-hidden="true"
+                    >▍</span>
+                  </div>
                   <ChatImage
                     v-if="msg.role === 'assistant' && msg.imageUrl"
                     :src="msg.imageUrl"
@@ -230,6 +242,18 @@
                     v-if="msg.role === 'assistant' && msg.attachments && msg.attachments.length"
                     :attachments="msg.attachments"
                     class="message-attachments"
+                  />
+                  <!-- RAG / 检索上下文摘要（event=context）：默认折叠 -->
+                  <ChatContext
+                    v-if="msg.role === 'assistant' && msg.context"
+                    :info="msg.context"
+                    class="message-context"
+                  />
+                  <!-- 工具调用（event=tool 累积）：逐条可折叠 -->
+                  <ChatToolCall
+                    v-if="msg.role === 'assistant' && msg.toolCalls && msg.toolCalls.length"
+                    :tool-calls="msg.toolCalls"
+                    class="message-tool-calls"
                   />
                 </template>
               </div>
@@ -246,8 +270,15 @@
               </div>
             </div>
 
-            <!-- Streaming indicator -->
-            <div v-if="chatStore.isStreaming" class="message-wrapper message-wrapper--assistant">
+            <!--
+              Streaming indicator：只在 SSE 还没下发第一条 delta 之前的"等待/思考"阶段显示三圆点。
+              一旦 typewriter 启动、首字符进消息气泡后，让位给气泡内的打字机光标 + 渐增的文本，
+              避免出现"消息已满 + 下方还在闪点"的双指示诡异画面。
+            -->
+            <div
+              v-if="chatStore.isStreaming && !streamingMessageId"
+              class="message-wrapper message-wrapper--assistant"
+            >
               <div class="message-avatar">
                 <span class="ai-avatar">
                   <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
@@ -558,10 +589,13 @@ import type { ChatSession, Message } from '@/types/chat'
 import { sendChatMessageStream } from '@/api/chat'
 import { useSpeechRecognition } from '@/composables/useSpeechRecognition'
 import { useSpeechSynthesis } from '@/composables/useSpeechSynthesis'
+import { createTypewriter } from '@/composables/useTypewriter'
 import PixelCharacter from '@/components/PixelCharacter.vue'
 import PixelScene from '@/components/PixelScene.vue'
 import ChatImage from '@/components/ChatImage.vue'
 import ChatAttachment from '@/components/ChatAttachment.vue'
+import ChatContext from '@/components/ChatContext.vue'
+import ChatToolCall from '@/components/ChatToolCall.vue'
 import { detectEmotion, EMOTION_LABELS, type Emotion } from '@/utils/emotion'
 
 const chatStore = useChatStore()
@@ -621,6 +655,39 @@ const speakingId = ref<string | null>(null)
  * 响应结束（流式 done / 主动 stop / TTS 结束）后再恢复。
  */
 const shouldResumeListening = ref(false)
+
+/* ---- 打字机（流式响应节流 + 闪烁光标） ---- */
+/**
+ * 关键问题：SSE 在 reader.read() 里会把多条 `data:` 帧攒成一坨同步回调，
+ * 多条 onChunk 在同一微任务里被连续调用，msg.content 一帧内涨到终态
+ * → 用户看到的是"瞬间满屏"，不是逐字/逐段打字。
+ *
+ * 修复：在 SSE → msg.content 之间插一个"打字机节流器"，让 delta 按固定
+ * 节奏（25ms / 拍，每拍最多 6 字符）喂到 UI 上。
+ * 流式消息有内容期间在气泡内显示一个闪烁光标 `▍`。
+ */
+const streamingMessageId = ref<string | null>(null)
+let typewriter: ReturnType<typeof createTypewriter> | null = null
+
+function startStreamingTypewriter(messageId: string, sink: (chunk: string) => void) {
+  if (typewriter) typewriter.stop(true)
+  streamingMessageId.value = messageId
+  typewriter = createTypewriter({
+    charsPerTick: 6,
+    tickMs: 25,
+    onAppend: sink,
+    onIdle: () => {
+      // 队列自然清空（极少触发——done/error 时走 stop flush，不依赖这里）
+    },
+  })
+}
+
+function stopStreamingTypewriter(flush: boolean, sink?: (chunk: string) => void) {
+  if (!typewriter) return
+  typewriter.stop(flush, sink)
+  typewriter = null
+  streamingMessageId.value = null
+}
 
 /* ---- 语音识别（STT，连续模式 + VAD 断句） ---- */
 // 关键修复：之前漏挂 onSentence，导致 VAD 断句后识别出的文本无人消费，
@@ -1066,6 +1133,15 @@ async function handleSend() {
   const lastMsg = session.messages[session.messages.length - 1]
   lastMsg.content = ''
 
+  // 启动打字机：每个 tick（25ms，最长 6 字符）把字符追加到当前 assistant 消息。
+  // 关键：append 在 sink 里发生，对应的 Vue 重渲染也是按节奏的，于是产生可见的"打字"。
+  startStreamingTypewriter(assistantMsg.id, (chunk) => {
+    lastMsg.content += chunk
+    session.updatedAt = Date.now()
+    // 滚动只需要按节流；用 rAF 或定时器再触发会与 typewriter tick 重合，意义不大
+    scrollToBottom()
+  })
+
   const messageString = session.messages
     .filter((m) => m.id !== assistantMsg.id)
     .filter((m) => m.content && m.content.trim().length > 0)
@@ -1082,50 +1158,78 @@ async function handleSend() {
       sessionId: wireSessionId,
       message: messageString,
     },
-    async (chunk) => {
-      chatStore.appendToLastAssistantMessage(localSessionId, chunk)
-      await scrollToBottom()
-    },
-    () => {
-      // 仅在 SSE 收到 [DONE] 之后才会触发；
-      // 这是"新 TTS 必须等用户句子识别 + chat 回包完成"的硬保证点。
-      chatStore.isStreaming = false
-      abortController = null
-      // 流式完成：若开启了自动播报，朗读最后一条 assistant 消息
-      // 像素人物模式下只要开启了自动语音对话就强制播报
-      const shouldSpeak =
-        (autoPlay.value || (chatMode.value === 'pixel' && pixelAutoListen.value)) &&
-        lastMsg &&
-        lastMsg.content.trim()
-      if (shouldSpeak) {
-        speakingId.value = lastMsg.id
-        console.info('[chat] SSE done, playing new TTS for msg=%s', lastMsg.id)
-        tts.speak(lastMsg.content)
-      } else {
-        // 不播报的情况下直接恢复录音
+    {
+      onChunk: async (chunk) => {
+        // 推到打字机队列，由节奏器决定何时 append。**不要**直接 appendToLastAssistantMessage
+        if (typewriter) typewriter.push(chunk)
+      },
+      // prefix 与 delta 走同一通道：拼进 assistant 消息（也走打字机）
+      onPrefix: async (content) => {
+        if (typewriter) typewriter.push(content)
+      },
+      // RAG / 检索上下文摘要（persona / L0 / L1 计数）
+      onContext: (info) => {
+        chatStore.appendMessageContext(localSessionId, info)
+      },
+      // 工具调用：单条 tool 帧触发一次
+      onTool: (toolCall) => {
+        chatStore.appendMessageToolCalls(localSessionId, [toolCall])
+      },
+      // 附件资源：每条 resource 帧单条追加，store 内按 fileId+chunkIndex 去重
+      onResource: async (resource) => {
+        chatStore.appendMessageResource(localSessionId, resource)
+        await scrollToBottom()
+      },
+      // 长期记忆：仅 toast 提示，不入消息气泡（store 仍有留存以便排查）
+      onMemory: (result) => {
+        chatStore.appendMessageMemoryResult(localSessionId, result)
+        if (result.ok) ElMessage.success('已提取长期记忆')
+        else ElMessage.warning(`长期记忆提取失败${result.error ? `：${result.error}` : ''}`)
+      },
+      onDone: () => {
+        // 收尾：先把打字机里剩余的字符 flush，再走 TTS / 恢复录音的逻辑，
+        // 避免 tts.speak(lastMsg.content) 拿到截断的文本。
+        stopStreamingTypewriter(true, (rest) => {
+          lastMsg.content += rest
+        })
+        chatStore.isStreaming = false
+        abortController = null
+        // 流式完成：若开启了自动播报，朗读最后一条 assistant 消息
+        // 像素人物模式下只要开启了自动语音对话就强制播报
+        const shouldSpeak =
+          (autoPlay.value || (chatMode.value === 'pixel' && pixelAutoListen.value)) &&
+          lastMsg &&
+          lastMsg.content.trim()
+        if (shouldSpeak) {
+          speakingId.value = lastMsg.id
+          console.info('[chat] SSE done, playing new TTS for msg=%s', lastMsg.id)
+          tts.speak(lastMsg.content)
+        } else {
+          // 不播报的情况下直接恢复录音
+          resumeListeningIfNeeded()
+        }
+      },
+      onError: (error) => {
+        // 出错也要把已排队的字符先 drain，让用户至少能看到已收到的部分回复
+        stopStreamingTypewriter(true, (rest) => {
+          lastMsg.content += rest
+        })
+        chatStore.isStreaming = false
+        abortController = null
+        ElMessage.error(`请求失败: ${error.message}`)
+        // 失败时也恢复录音
         resumeListeningIfNeeded()
-      }
-    },
-    (error) => {
-      chatStore.isStreaming = false
-      abortController = null
-      ElMessage.error(`请求失败: ${error.message}`)
-      // 失败时也恢复录音
-      resumeListeningIfNeeded()
-    },
-    async (imageUrl) => {
-      chatStore.setMessageImageUrl(localSessionId, imageUrl)
-      await scrollToBottom()
-    },
-    async (attachments) => {
-      chatStore.appendMessageAttachments(localSessionId, attachments)
-      await scrollToBottom()
+      },
     },
   )
 }
 
 function handleStop() {
   abortController?.abort()
+  // 手动停流：先把打字机里已排队的字符 flush 到消息上，避免 UI 卡在 90% 文本上
+  const session = chatStore.currentSession
+  const lastMsg = session?.messages[session.messages.length - 1]
+  stopStreamingTypewriter(true, lastMsg ? (rest) => (lastMsg.content += rest) : undefined)
   chatStore.isStreaming = false
   abortController = null
   // 手动停流：onDone 不会触发，这里手动决定是否恢复录音
@@ -2118,6 +2222,23 @@ const placeholderHint = computed(() => {
   background: rgba(255, 255, 255, 0.5);
   animation: pulse 1.4s ease-in-out infinite;
   margin: 0 0.2rem;
+}
+
+/* 打字机光标：渲染在 .message-content 末尾，仅在 streamingMessageId 命中时出现 */
+.typing-caret {
+  display: inline-block;
+  margin-left: 1px;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.85);
+  animation: typing-caret-blink 1s steps(2, start) infinite;
+  /* 让光标在字符流的同一个 inline 区间内显示 */
+  vertical-align: baseline;
+}
+
+@keyframes typing-caret-blink {
+  to {
+    opacity: 0;
+  }
 }
 
 .streaming-dot:nth-child(2) {

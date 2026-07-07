@@ -1,27 +1,30 @@
-// 单元测试：SSE 解析器（src/api/chat.ts 里的纯函数版本）
-// 用 Node 内置 test runner，跑：`node --test test/sse-parse.test.mjs`
+// 单元测试：SSE buffer（src/api/chat.ts 里的 makeSseBuffer 复刻）
+// 跑：`node --test test/sse-parse.test.mjs`
 //
-// 目的：验证 chat.ts 的解析逻辑能正确处理真实后端的
-//   event: start / delta / finish 协议，并避免 finish 帧里的 reply 被重复追加。
+// 目的：
+//   1. SSE buffer 能正确切分跨 chunk 的 data 行
+//   2. CRLF / LF / 粘连等边界都能被 fallback flush 处理
+//   3. 真后端的 data 格式（无 event: 行）也能被解析
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-// --- 把 chat.ts 里的解析函数原样复制（保持一致；改动时两处同步） ---
+// --- 与 chat.ts 严格对齐的复刻实现 ---
 
 function makeSseBuffer() {
   let buffer = ''
   return {
     push(chunk) {
-      buffer += chunk.replace(/\r\n/g, '\n').replace(/(?<!\n)\r/g, '\n')
+      buffer += chunk
       const out = []
-      let sepIndex = buffer.indexOf('\n\n')
+      let sepIndex = findEventSeparator(buffer)
       while (sepIndex !== -1) {
+        const sepLen = separatorLength(buffer, sepIndex)
         const event = buffer.slice(0, sepIndex)
-        buffer = buffer.slice(sepIndex + 2)
+        buffer = buffer.slice(sepIndex + sepLen)
         const frame = parseSseEvent(event)
         if (frame) out.push(frame)
-        sepIndex = buffer.indexOf('\n\n')
+        sepIndex = findEventSeparator(buffer)
       }
       return out
     },
@@ -38,6 +41,24 @@ function makeSseBuffer() {
   }
 }
 
+function findEventSeparator(buf) {
+  const i1 = buf.indexOf('\n\n')
+  if (i1 !== -1) return i1
+  const i2 = buf.indexOf('\r\n\r\n')
+  if (i2 !== -1) return i2
+  const i3 = buf.indexOf('\n\r\n')
+  if (i3 !== -1) return i3
+  return buf.indexOf('\r\n\n')
+}
+
+function separatorLength(buf, idx) {
+  if (buf.startsWith('\n\n', idx)) return 2
+  if (buf.startsWith('\r\n\r\n', idx)) return 4
+  if (buf.startsWith('\n\r\n', idx)) return 3
+  if (buf.startsWith('\r\n\n', idx)) return 3
+  return 2
+}
+
 function parseSseEvent(eventText) {
   let eventName = 'message'
   const dataLines = []
@@ -52,230 +73,103 @@ function parseSseEvent(eventText) {
     if (field === 'event') eventName = value || 'message'
     else if (field === 'data') dataLines.push(value)
   }
-  if (dataLines.length === 0 && eventName === 'message') return null
+  if (dataLines.length === 0) return null
   return { event: eventName, data: dataLines.join('\n') }
 }
 
-function extractDeltaContent(data) {
-  const trimmed = data.trim()
-  if (!trimmed) return ''
-  if (trimmed.startsWith('{')) {
-    try {
-      const parsed = JSON.parse(trimmed)
-      const content = parsed.choices?.[0]?.delta?.content
-      if (typeof content === 'string') return content
-    } catch {
-      /* fallthrough */
-    }
-  }
-  return trimmed
-}
-
-// --- 复刻 handleFrame 的核心分支（与 chat.ts 保持一致） ---
-
-function handleFrame(frame, onChunk, onImageUrl, onAttachments, onFinish, markReceived) {
-  const data = frame.data.trim()
-  const event = frame.event
-
-  if (data === '[DONE]') return
-  if (!data) {
-    if (event === 'start') console.info('[sse] ← event=start')
-    return
-  }
-  markReceived()
-
-  if (event === 'delta' || event === 'message') {
-    if (data.startsWith('{')) {
-      try {
-        const parsed = JSON.parse(data)
-        const oaContent = parsed.choices?.[0]?.delta?.content
-        if (typeof oaContent === 'string' && oaContent) {
-          onChunk(oaContent)
-        } else {
-          const inc = parsed.delta ?? parsed.reply
-          if (typeof inc === 'string' && inc) onChunk(inc)
-        }
-        if (parsed.imageUrl && onImageUrl) onImageUrl(parsed.imageUrl)
-        if (onAttachments && Array.isArray(parsed.attachments) && parsed.attachments.length) {
-          onAttachments(parsed.attachments.map(normalize))
-        }
-        return
-      } catch {
-        /* fallthrough */
-      }
-    }
-    onChunk(extractDeltaContent(data))
-    return
-  }
-
-  if (event === 'start') return
-  if (event === 'finish' || event === 'done' || event === 'complete') {
-    let payload
-    let attachments = []
-    if (data.startsWith('{')) {
-      try {
-        const parsed = JSON.parse(data)
-        payload = { reply: parsed.reply, sessionId: parsed.sessionId }
-        if (Array.isArray(parsed.attachments)) attachments = parsed.attachments.map(normalize)
-      } catch {
-        /* ignore */
-      }
-    }
-    if (attachments.length && onAttachments) onAttachments(attachments)
-    onFinish?.(payload ?? {})
-    return
-  }
-
-  if (data.startsWith('{')) {
-    try {
-      const parsed = JSON.parse(data)
-      if (parsed.choices?.[0]?.delta?.content) {
-        onChunk(parsed.choices[0].delta.content)
-        return
-      }
-      if (parsed.data?.reply) onChunk(parsed.data.reply)
-      if (parsed.data?.imageUrl && onImageUrl) onImageUrl(parsed.data.imageUrl)
-      const raw = parsed.attachments ?? parsed.data?.attachments
-      if (onAttachments && Array.isArray(raw) && raw.length) onAttachments(raw.map(normalize))
-      return
-    } catch {
-      /* fallthrough */
-    }
-  }
-  onChunk(extractDeltaContent(data))
-}
-
-function normalize(r) {
-  const url = (r?.url || '').trim()
-  if (!url) return null
-  const mimeType = r.mimeType ?? r.mime_type
-  return {
-    id: r.id || `${url}#${r.name || ''}`,
-    name: r.name || url.split('/').pop() || '附件',
-    url,
-    mimeType,
-    size: typeof r.size === 'number' ? r.size : undefined,
-    type: r.type === 'image' || r.type === 'file'
-      ? r.type
-      : mimeType?.toLowerCase().startsWith('image/')
-        ? 'image'
-        : undefined,
-  }
-}
-
-// --- 真实后端格式复刻 ---
-
-const REAL_BACKEND = [
-  'event: start\r\n',
-  'data: {"sessionId":"aeB6H20-H9RJcuWk-xAy4"}\r\n',
-  '\r\n',
-  'event: delta\r\n',
-  'data: {"delta":"非常抱歉，","reply":"非常抱歉，"}\r\n',
-  '\r\n',
-  'event: delta\r\n',
-  'data: {"delta":"作为一个通用助手","reply":"非常抱歉，作为一个通用助手"}\r\n',
-  '\r\n',
-  'event: finish\r\n',
-  'data: {"reply":"非常抱歉，作为一个通用助手……完整文本","sessionId":"aeB6H20-H9RJcuWk-xAy4"}\r\n',
-  '\r\n',
-].join('')
-
-// --- 工具：把整段 SSE 按字节喂给 buffer，模拟 fetch+ReadableStream ---
+// --- 工具：把整段 SSE 按字节喂给 buffer ---
 
 function runFrames(sseText) {
   const buf = makeSseBuffer()
-  const chunks = []
+  const out = []
   let pos = 0
-  // 模拟按 1~8 字节的不定长 read 分片
   while (pos < sseText.length) {
-    const step = Math.min(sseText.length - pos, 1 + (pos % 7))
+    const step = Math.min(sseText.length - pos, 4)
     const slice = sseText.slice(pos, pos + step)
     pos += step
-    const frames = buf.push(slice)
-    for (const f of frames) chunks.push(f)
+    out.push(...buf.push(slice))
   }
-  for (const f of buf.flush()) chunks.push(f)
-  return chunks
+  out.push(...buf.flush())
+  return out
 }
 
-test('SSE buffer 切分出 start/delta/delta/finish 四帧', () => {
-  const frames = runFrames(REAL_BACKEND)
-  assert.equal(frames.length, 4)
-  assert.equal(frames[0].event, 'start')
-  assert.equal(frames[1].event, 'delta')
-  assert.equal(frames[2].event, 'delta')
-  assert.equal(frames[3].event, 'finish')
-})
+// ---------------------------------------------------------------------------
+// 1. 新协议格式：所有帧都只有 data: 行（没有 event:）
+// ---------------------------------------------------------------------------
 
-test('handleFrame 提取到的增量拼接 == 完整 reply（且不重复）', () => {
-  const frames = runFrames(REAL_BACKEND)
-  let assembled = ''
-  let finishCalled = 0
-  const imageUrls = []
-
-  for (const f of frames) {
-    handleFrame(
-      f,
-      (chunk) => {
-        assembled += chunk
-      },
-      (url) => imageUrls.push(url),
-      undefined,
-      () => {
-        finishCalled += 1
-      },
-      () => {},
-    )
-  }
-
-  // 两个 delta 的 delta 字段拼起来就是完整文本
-  assert.equal(assembled, '非常抱歉，作为一个通用助手')
-  // finish 帧不再追加 reply，避免重复
-  assert.equal(finishCalled, 1)
-  assert.equal(imageUrls.length, 0)
-})
-
-test('OpenAI 兼容格式依旧能识别 choices[0].delta.content', () => {
-  const sse =
-    'data: {"choices":[{"delta":{"content":"Hello"}}]}\n\n' +
-    'data: {"choices":[{"delta":{"content":" world"}}]}\n\n' +
-    'data: [DONE]\n\n'
+test('新协议：data-only 帧切出 type + payload', () => {
+  const sse = [
+    'data: {"type":"context","persona_len":412,"core_count":3,"l1_count":2}\n\n',
+    'data: {"type":"delta","text":"你好，"}\n\n',
+    'data: {"type":"delta","text":"世界！"}\n\n',
+    'data: {"type":"done","full":"你好，世界！"}\n\n',
+  ].join('')
 
   const frames = runFrames(sse)
-  let text = ''
-  for (const f of frames) {
-    handleFrame(
-      f,
-      (c) => (text += c),
-      undefined,
-      undefined,
-      undefined,
-      () => {},
-    )
-  }
-  assert.equal(text, 'Hello world')
+  assert.equal(frames.length, 4)
+  // 全部都是默认 event（message）；路由靠 data.type 字段
+  for (const f of frames) assert.equal(f.event, 'message')
+
+  // 解析后能拿到 type
+  const types = frames.map((f) => JSON.parse(f.data.trim()).type)
+  assert.deepEqual(types, ['context', 'delta', 'delta', 'done'])
 })
 
-test('CRLF 也能被切出来（真实 Node fetch 默认 chunk 可能含 \\r\\n）', () => {
-  const frames = runFrames(REAL_BACKEND)
-  // 同上：start/delta/delta/finish
-  assert.equal(frames.length, 4)
+// ---------------------------------------------------------------------------
+// 2. CRLF 边界：后端用 \r\n 时也能切出来
+// ---------------------------------------------------------------------------
+
+test('CRLF 边界：\\r\\n\\r\\n 也能作为事件分隔', () => {
+  const sse = [
+    'data: {"type":"delta","text":"hi"}\r\n\r\n',
+    'data: {"type":"done","full":"hi"}\r\n\r\n',
+  ].join('')
+  const frames = runFrames(sse)
+  assert.equal(frames.length, 2)
+  assert.equal(JSON.parse(frames[0].data).type, 'delta')
+  assert.equal(JSON.parse(frames[1].data).type, 'done')
 })
+
+// ---------------------------------------------------------------------------
+// 3. 残缺事件：flush 救场
+// ---------------------------------------------------------------------------
 
 test('服务端漏掉空行的"粘连"也能 fallback 处理（flush 救场）', () => {
-  // delta + finish 没有空行分隔 —— 这是用户给的实际报文片段
   const bad = [
-    'event: start\r\n',
-    'data: {"sessionId":"s1"}\r\n',
-    '\r\n',
-    'event: delta\r\n',
-    'data: {"delta":"hi","reply":"hi"}\r\n',
-    'event: finish\r\n',
-    'data: {"reply":"hi","sessionId":"s1"}\r\n',
-    '\r\n',
-  ].join('')
+    'data: {"type":"delta","text":"hi"}\n\n',
+    'data: {"type":"done","full":"hi"}\n',
+  ].join('') // done 帧末尾没有换行 → flush 救场
   const frames = runFrames(bad)
-  // flush 会尝试把残余部分当一帧解析；如果它不是合法 SSE，至少 start 应当先被切出来
-  assert.ok(frames.length >= 1)
-  assert.equal(frames[0].event, 'start')
+  assert.ok(frames.length >= 2)
+  assert.equal(JSON.parse(frames[0].data).type, 'delta')
+})
+
+// ---------------------------------------------------------------------------
+// 4. OpenAI 风格 [DONE] 哨兵也能被 buffer 切出来
+// ---------------------------------------------------------------------------
+
+test('OpenAI 风格 data: [DONE] 仍能被 buffer 切分', () => {
+  const sse = [
+    'data: {"type":"delta","text":"x"}\n\n',
+    'data: [DONE]\n\n',
+  ].join('')
+  const frames = runFrames(sse)
+  assert.equal(frames.length, 2)
+  assert.equal(frames[1].data.trim(), '[DONE]')
+})
+
+// ---------------------------------------------------------------------------
+// 5. resource 帧切分正确（带 32 字符 event_id）
+// ---------------------------------------------------------------------------
+
+test('resource 帧：含 event_id 与 modality 字段也能正确切分', () => {
+  const sse =
+    'data: {"type":"resource","event_id":"a1b2c3d4e5f67890a1b2c3d4e5f67890","url":"cdn.example.com/lab.jpg","name":"拉布拉多.jpg","display_name":"拉布拉多.jpg","file_id":"F-1024","modality":"image","mime_type":"image/jpeg","chunk_index":0,"total_chunks":1,"size_bytes":248532,"similarity":0.42,"source":"search_memory","iter":0}\n\n'
+  const frames = runFrames(sse)
+  assert.equal(frames.length, 1)
+  const obj = JSON.parse(frames[0].data)
+  assert.equal(obj.type, 'resource')
+  assert.equal(obj.modality, 'image')
+  assert.equal(obj.event_id.length, 32)
+  assert.equal(obj.chunk_index, 0)
 })
