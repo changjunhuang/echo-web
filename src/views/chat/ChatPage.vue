@@ -171,9 +171,34 @@
                 </template>
                 <template v-else>
                   <span class="ai-avatar">
-                    <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
-                      <circle cx="10" cy="10" r="9" stroke="#165dff" stroke-width="1.5"/>
-                      <path d="M6 10h8M10 6v8" stroke="#165dff" stroke-width="1.5" stroke-linecap="round"/>
+                    <svg viewBox="0 0 32 32" fill="none" aria-hidden="true">
+                      <defs>
+                        <linearGradient id="aiAvatarBg" x1="0" y1="0" x2="32" y2="32" gradientUnits="userSpaceOnUse">
+                          <stop offset="0%" stop-color="#5b8def"/>
+                          <stop offset="100%" stop-color="#7c5cff"/>
+                        </linearGradient>
+                        <linearGradient id="aiAvatarFace" x1="16" y1="10" x2="16" y2="22" gradientUnits="userSpaceOnUse">
+                          <stop offset="0%" stop-color="#ffffff"/>
+                          <stop offset="100%" stop-color="#dbe6ff"/>
+                        </linearGradient>
+                      </defs>
+                      <!-- 外圆：渐变背景 -->
+                      <circle cx="16" cy="16" r="14" fill="url(#aiAvatarBg)"/>
+                      <!-- 高光：左上弧，让圆球有立体感 -->
+                      <circle cx="11" cy="11" r="4" fill="rgba(255,255,255,0.18)"/>
+                      <!-- AI 头部（圆角方形） -->
+                      <rect x="9" y="10" width="14" height="12" rx="3.5" fill="url(#aiAvatarFace)"/>
+                      <!-- 眼睛：两个小圆 -->
+                      <circle cx="13.2" cy="16" r="1.05" fill="#2a3a66"/>
+                      <circle cx="18.8" cy="16" r="1.05" fill="#2a3a66"/>
+                      <!-- 嘴角：微笑弧线 -->
+                      <path d="M13.4 19.2 Q16 21 18.6 19.2" stroke="#2a3a66" stroke-width="1.1" stroke-linecap="round" fill="none"/>
+                      <!-- 天线：左 -->
+                      <line x1="12" y1="10" x2="11.2" y2="6.8" stroke="#ffffff" stroke-width="1.3" stroke-linecap="round"/>
+                      <circle cx="11.2" cy="6.2" r="1.2" fill="#ffd66e"/>
+                      <!-- 天线：右 -->
+                      <line x1="20" y1="10" x2="20.8" y2="6.8" stroke="#ffffff" stroke-width="1.3" stroke-linecap="round"/>
+                      <circle cx="20.8" cy="6.2" r="1.2" fill="#ffd66e"/>
                     </svg>
                   </span>
                 </template>
@@ -281,9 +306,27 @@
             >
               <div class="message-avatar">
                 <span class="ai-avatar">
-                  <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
-                    <circle cx="10" cy="10" r="9" stroke="#165dff" stroke-width="1.5"/>
-                    <path d="M6 10h8M10 6v8" stroke="#165dff" stroke-width="1.5" stroke-linecap="round"/>
+                  <svg viewBox="0 0 32 32" fill="none" aria-hidden="true">
+                    <defs>
+                      <linearGradient id="aiAvatarBg2" x1="0" y1="0" x2="32" y2="32" gradientUnits="userSpaceOnUse">
+                        <stop offset="0%" stop-color="#5b8def"/>
+                        <stop offset="100%" stop-color="#7c5cff"/>
+                      </linearGradient>
+                      <linearGradient id="aiAvatarFace2" x1="16" y1="10" x2="16" y2="22" gradientUnits="userSpaceOnUse">
+                        <stop offset="0%" stop-color="#ffffff"/>
+                        <stop offset="100%" stop-color="#dbe6ff"/>
+                      </linearGradient>
+                    </defs>
+                    <circle cx="16" cy="16" r="14" fill="url(#aiAvatarBg2)"/>
+                    <circle cx="11" cy="11" r="4" fill="rgba(255,255,255,0.18)"/>
+                    <rect x="9" y="10" width="14" height="12" rx="3.5" fill="url(#aiAvatarFace2)"/>
+                    <circle cx="13.2" cy="16" r="1.05" fill="#2a3a66"/>
+                    <circle cx="18.8" cy="16" r="1.05" fill="#2a3a66"/>
+                    <path d="M13.4 19.2 Q16 21 18.6 19.2" stroke="#2a3a66" stroke-width="1.1" stroke-linecap="round" fill="none"/>
+                    <line x1="12" y1="10" x2="11.2" y2="6.8" stroke="#ffffff" stroke-width="1.3" stroke-linecap="round"/>
+                    <circle cx="11.2" cy="6.2" r="1.2" fill="#ffd66e"/>
+                    <line x1="20" y1="10" x2="20.8" y2="6.8" stroke="#ffffff" stroke-width="1.3" stroke-linecap="round"/>
+                    <circle cx="20.8" cy="6.2" r="1.2" fill="#ffd66e"/>
                   </svg>
                 </span>
               </div>
@@ -585,6 +628,7 @@ import {
 } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { useChatStore } from '@/stores/chat'
+import { useRolesStore } from '@/stores/roles'
 import type { ChatSession, Message } from '@/types/chat'
 import { sendChatMessageStream } from '@/api/chat'
 import { useSpeechRecognition } from '@/composables/useSpeechRecognition'
@@ -599,6 +643,7 @@ import ChatToolCall from '@/components/ChatToolCall.vue'
 import { detectEmotion, EMOTION_LABELS, type Emotion } from '@/utils/emotion'
 
 const chatStore = useChatStore()
+const rolesStore = useRolesStore()
 const inputText = ref('')
 const emptyInputText = ref('')
 const messagesArea = ref<HTMLElement | null>(null)
@@ -1156,6 +1201,9 @@ async function handleSend() {
       model: chatStore.selectedModel,
       userId: chatStore.userId,
       sessionId: wireSessionId,
+      // 把当前激活角色 ID 透传到后端，让 Python 按角色隔离记忆检索/生成。
+      // 未登录 / 角色未就绪时 fallback 到 'default'（与后端默认角色对齐）。
+      roleId: rolesStore.currentRoleId || 'default',
       message: messageString,
     },
     {
@@ -2076,6 +2124,30 @@ const placeholderHint = computed(() => {
   flex-shrink: 0;
   background: #333;
   color: rgba(255, 255, 255, 0.7);
+}
+
+/* AI 助手头像：渐变圆形容器，让 SVG 完整居中渲染 */
+.ai-avatar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  overflow: hidden;
+  box-shadow: 0 0.18rem 0.5rem rgba(22, 93, 255, 0.35);
+}
+
+.ai-avatar svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+/* 用户头像容器：保留原灰色圆形 */
+.message-wrapper--user .message-avatar {
+  background: linear-gradient(135deg, #165dff, #5b8def);
+  color: #fff;
 }
 
 .message-bubble {

@@ -17,6 +17,7 @@ export const useUploadStore = defineStore('upload', () => {
       status: 'pending',
       progress: 0,
       createdAt: Date.now(),
+      description: '',
     }
     files.value.unshift(uploadFile)
     fileBlobs.value.set(uploadFile.id, file)
@@ -25,7 +26,7 @@ export const useUploadStore = defineStore('upload', () => {
 
   function updateFileStatus(
     id: string,
-    updates: Partial<Pick<UploadFile, 'status' | 'progress' | 'url' | 'error' | 'qiniuStatus' | 'backendStatus'>>,
+    updates: Partial<Pick<UploadFile, 'status' | 'progress' | 'url' | 'error' | 'qiniuStatus' | 'backendStatus' | 'description'>>,
   ) {
     const file = files.value.find((f) => f.id === id)
     if (file) Object.assign(file, updates)

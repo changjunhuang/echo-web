@@ -106,6 +106,11 @@ export interface ChatRequest {
   model: string
   userId: string
   sessionId: string
+  /**
+   * 角色 ID；用于在 Python 端按角色隔离记忆检索与生成。
+   * 未传时后端默认填 'default'，避免破坏老调用。
+   */
+  roleId?: string
   messages?: Pick<Message, 'role' | 'content'>[]
   message?: string
   stream?: boolean

@@ -41,15 +41,15 @@
             <el-icon :size="40"><Folder /></el-icon>
           </div>
           <div class="card-info">
-            <h3 class="card-title">文件管理</h3>
-            <p class="card-desc">上传、查看和管理您的文件资源</p>
+            <h3 class="card-title">记忆管理</h3>
+            <p class="card-desc">上传记忆文件、维护文本描述，按角色管理专属记忆</p>
           </div>
           <el-icon class="card-arrow"><ArrowRight /></el-icon>
         </div>
       </div>
 
       <div class="home-footer">
-        <p>基于 AI 技术构建，提供智能对话与文件管理服务</p>
+        <p>基于 AI 技术构建，提供智能对话与记忆管理服务</p>
       </div>
     </div>
 
@@ -65,9 +65,11 @@ import { ChatDotRound, Folder, ArrowRight } from '@element-plus/icons-vue'
 import { ElMessageBox } from 'element-plus'
 import LoginDialog from '@/components/LoginDialog.vue'
 import { useAuthStore } from '@/stores/auth'
+import { useRolesStore } from '@/stores/roles'
 
 const router = useRouter()
 const authStore = useAuthStore()
+const rolesStore = useRolesStore()
 
 const loginDialogVisible = ref(false)
 
@@ -106,6 +108,8 @@ async function handleLogout() {
     return
   }
   await authStore.logout()
+  // 清空角色 store，避免下次登录复用上一个账号的 currentRoleId
+  rolesStore.clear()
   loginDialogVisible.value = true
 }
 

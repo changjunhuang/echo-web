@@ -23,12 +23,13 @@
 </template>
 
 <script setup lang="ts">
-import { Upload, ChatDotRound, HomeFilled } from '@element-plus/icons-vue'
+import { ChatDotRound, HomeFilled, User, FolderOpened } from '@element-plus/icons-vue'
 
 const navItems = [
   { path: '/home', label: '首页', icon: HomeFilled },
   { path: '/chat', label: '智能对话', icon: ChatDotRound },
-  { path: '/admin/upload', label: '文件管理', icon: Upload },
+  { path: '/admin/memory', label: '记忆管理', icon: FolderOpened },
+  { path: '/admin/roles', label: '角色管理', icon: User },
 ]
 </script>
 

@@ -33,10 +33,24 @@ const routes: RouteRecordRaw[] = [
         meta: { title: '智能对话', fullBleed: true },
       },
       {
+        path: 'memory',
+        name: 'AdminMemory',
+        component: () => import('@/views/admin/MemoryPage.vue'),
+        meta: { title: '记忆管理' },
+      },
+      {
+        path: 'memory/upload',
+        redirect: '/admin/memory',
+      },
+      {
         path: 'upload',
-        name: 'AdminUpload',
-        component: () => import('@/views/admin/FileUploadPage.vue'),
-        meta: { title: '文件管理' },
+        redirect: '/admin/memory',
+      },
+      {
+        path: 'roles',
+        name: 'AdminRoles',
+        component: () => import('@/views/admin/RolesPage.vue'),
+        meta: { title: '角色管理' },
       },
     ],
   },

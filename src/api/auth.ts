@@ -8,6 +8,7 @@
  */
 
 import request from './index'
+import type { AxiosResponse } from 'axios'
 import type {
   CheckResponse,
   LoginRequest,
@@ -25,16 +26,21 @@ interface Envelope<T> {
 
 /** 统一拆包：成功返回 data，失败抛出后端 message
  *
+ * 重要：api/index.ts 的 response.interceptor 已 unwrap 过一次，
+ * await 拿到的就是 HTTP body（即 Envelope 本身），不是 AxiosResponse。
+ * TS 类型上 axios 仍标为 AxiosResponse，所以这里用 `as unknown as Envelope<T>`
+ * 把运行时形态对齐到业务期望。
+ *
  * 后端 `code` 与 HTTP 状态码同义：2xx 表示成功。
  * 为兼容旧接口，code === 0 同样视为成功。
  */
-async function unwrap<T>(promise: Promise<Envelope<T>>): Promise<T> {
-  const res = await promise
-  const ok = res.code === 0 || (res.code >= 200 && res.code < 300)
+async function unwrap<T>(promise: Promise<AxiosResponse<Envelope<T>>>): Promise<T> {
+  const env = (await promise) as unknown as Envelope<T>
+  const ok = env.code === 0 || (env.code >= 200 && env.code < 300)
   if (!ok) {
-    throw new Error(res.message || '请求失败')
+    throw new Error(env.message || '请求失败')
   }
-  return res.data
+  return env.data
 }
 
 /** 登录：账号 + 密码 */

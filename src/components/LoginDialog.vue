@@ -38,6 +38,7 @@
           clearable
           :prefix-icon="User"
           autocomplete="username"
+          :disabled="submitting"
         />
       </el-form-item>
 
@@ -49,6 +50,7 @@
           show-password
           :prefix-icon="Lock"
           autocomplete="current-password"
+          :disabled="submitting"
           @keyup.enter="handleLogin"
         />
       </el-form-item>
@@ -61,9 +63,19 @@
           <a class="login-dialog__link" @click="goRegister">立即注册</a>
         </div>
         <div class="login-dialog__actions">
-          <el-button plain @click="emit('update:modelValue', false)">取消</el-button>
-          <el-button type="primary" :loading="submitting" @click="handleLogin">
-            登录
+          <el-button plain :disabled="submitting" @click="emit('update:modelValue', false)">
+            取消
+          </el-button>
+          <el-button
+            type="primary"
+            :disabled="submitting"
+            class="login-dialog__submit"
+            :class="{ 'is-submitting': submitting }"
+            @click="handleLogin"
+          >
+            <span class="login-dialog__submit-text">
+              {{ submitting ? '登录中…' : '登录' }}
+            </span>
           </el-button>
         </div>
       </div>
@@ -252,5 +264,50 @@ function goRegister() {
   display: flex;
   gap: 0.5rem;
   margin-left: auto;
+}
+
+/* 登录按钮：去掉默认 loading 旋转动画，改用文字态切换 + 轻微脉动表示进行中 */
+.login-dialog__submit :deep(.el-loading-spinner) {
+  display: none !important;
+}
+
+.login-dialog__submit :deep(.el-button__text) {
+  display: none !important;
+}
+
+.login-dialog__submit-text {
+  display: inline-block;
+  transition: opacity 0.2s ease;
+}
+
+.login-dialog__submit.is-submitting {
+  position: relative;
+  overflow: hidden;
+}
+
+.login-dialog__submit.is-submitting::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 35%;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(255, 255, 255, 0.28) 50%,
+    transparent 100%
+  );
+  animation: login-submit-shimmer 1.2s ease-in-out infinite;
+  pointer-events: none;
+}
+
+@keyframes login-submit-shimmer {
+  0% {
+    transform: translateX(-120%);
+  }
+  100% {
+    transform: translateX(360%);
+  }
 }
 </style>

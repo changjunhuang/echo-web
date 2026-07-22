@@ -5,6 +5,7 @@
  *  - 通过 localStorage 持久化会话，过期后自动失效（TTL 由后端 expireAt 决定）
  *  - 提供登录/注册/登出操作
  *  - 启动时若本地仍有有效 session，尝试向服务端校验一次
+ *  - 滑动过期：每次与后端成功交互时把 expiresAt 续期 SESSION_TTL_MS
  *
  * 设计要点：
  *  - 业务接口统一在 stores 层调用，组件只与 store 交互
@@ -17,7 +18,6 @@ import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import { ElMessage } from 'element-plus'
 import {
-  checkSession,
   login as loginApi,
   logout as logoutApi,
   register as registerApi,
@@ -29,6 +29,12 @@ import type {
 } from '@/types/auth'
 
 const STORAGE_KEY = 'echo_auth_session'
+
+/**
+ * 前端会话有效期：登录后/每次成功与后端交互时，把 expiresAt 续到这里。
+ * 1 小时 = 60 * 60 * 1000ms
+ */
+export const SESSION_TTL_MS = 60 * 60 * 1000
 
 /** localStorage 中存储的会话快照（内部统一使用毫秒时间戳） */
 interface SessionSnapshot {
@@ -95,6 +101,27 @@ export const useAuthStore = defineStore('auth', () => {
     writeSnapshot(null)
   }
 
+  /**
+   * 把过期时间续为 now + SESSION_TTL_MS。
+   * - 仅在已登录态下生效（没有 sessionId 时不动）
+   * - 写入 localStorage，让跨标签页 / 刷新后仍能拿到一致的过期时间
+   * - 由 axios 响应拦截器在每次与后端成功交互时调用
+   */
+  function touchSession(): void {
+    if (!sessionId.value) return
+    const newExpires = Date.now() + SESSION_TTL_MS
+    // 仅当新过期时间确实更大时刷新，避免高频调用写回造成抖动
+    if (newExpires <= expiresAt.value) return
+    expiresAt.value = newExpires
+    if (currentUser.value) {
+      writeSnapshot({
+        sessionId: sessionId.value,
+        expiresAt: newExpires,
+        user: currentUser.value,
+      })
+    }
+  }
+
   /** 登录 */
   async function login(payload: LoginRequest) {
     const data = await loginApi(payload)
@@ -102,9 +129,11 @@ export const useAuthStore = defineStore('auth', () => {
     if (!expMs) {
       throw new Error('登录响应缺少有效的过期时间')
     }
+    // 登录成功后，把过期时间对齐到"登录时刻 + SESSION_TTL_MS"，
+    // 避免后端返回的过期时间与前端策略不一致。
     applySession({
       sessionId: data.sessionId,
-      expiresAt: expMs,
+      expiresAt: Date.now() + SESSION_TTL_MS,
       user: data.user,
     })
     ElMessage.success(`欢迎回来，${data.user.nickname}`)
@@ -133,33 +162,25 @@ export const useAuthStore = defineStore('auth', () => {
     ElMessage.success('已退出登录')
   }
 
-  /** 应用启动时调用：恢复本地会话，并尝试与服务端校验 */
+  /**
+   * 应用启动时调用：仅从 localStorage 恢复本地会话。
+   *
+   * 重要：这里不再向服务端发起 checkSession，原因有二：
+   *  1. F5 刷新时，如果服务端 session 因任何原因（重启 / 过期 / 网络抖动）
+   *     返回 401，响应拦截器会调用 clearSession 把用户踢下线——这违反了
+   *     "1 小时无后端交互才自动退出"的产品规则。
+   *  2. 本地 expiresAt 已经按 SESSION_TTL_MS 滑动续期，本身就是权威。
+   *     服务端 session 是否还活着，留给用户下一次真实请求来验证（若失效会
+   *     自然拿到 401，再走拦截器清理即可）。
+   *
+   * 所以这里只做"读 localStorage → 写到内存"，不做任何远端校验。
+   */
   async function bootstrap() {
     const snap = readSnapshot()
     if (!snap) return
     sessionId.value = snap.sessionId
     expiresAt.value = snap.expiresAt
     currentUser.value = snap.user
-
-    // 异步向服务端确认一次；如果已失效则清理
-    try {
-      const res = await checkSession(snap.sessionId)
-      const expMs = parseExpireAt(res.expireAt)
-      if (!expMs) {
-        clearSession()
-        return
-      }
-      // 用服务端返回的更准确的过期时间刷新
-      expiresAt.value = expMs
-      currentUser.value = res.user
-      writeSnapshot({
-        sessionId: snap.sessionId,
-        expiresAt: expMs,
-        user: res.user,
-      })
-    } catch {
-      clearSession()
-    }
   }
 
   return {
@@ -173,5 +194,6 @@ export const useAuthStore = defineStore('auth', () => {
     logout,
     bootstrap,
     clearSession,
+    touchSession,
   }
 })
