@@ -390,9 +390,9 @@ test('端到端：同一资源多次召回 → 通过 fileId+chunkIndex 在 stor
 test('端到端：URL 不带 scheme → 前端用 resolveUrl() 补齐', () => {
   // 后端实际推送格式（按 spec §4.1）：url 字段不带 http/https 前缀
   const r = parseResource(
-    '{"type":"resource","url":"the04ztre.hn-bkt.clouddn.com/default/20260629/lab.jpg","modality":"image","file_id":"F-1","chunk_index":0,"total_chunks":1}',
+    '{"type":"resource","url":"tixapmuo5.hn-bkt.clouddn.com/default/20260629/lab.jpg","modality":"image","file_id":"F-1","chunk_index":0,"total_chunks":1}',
   )
-  assert.equal(r.url, 'the04ztre.hn-bkt.clouddn.com/default/20260629/lab.jpg')
+  assert.equal(r.url, 'tixapmuo5.hn-bkt.clouddn.com/default/20260629/lab.jpg')
   // 前端必须 resolve
   function resolveUrl(url, proto = 'https:') {
     if (!url) return url
@@ -402,6 +402,6 @@ test('端到端：URL 不带 scheme → 前端用 resolveUrl() 补齐', () => {
   }
   assert.equal(
     resolveUrl(r.url),
-    'https://the04ztre.hn-bkt.clouddn.com/default/20260629/lab.jpg',
+    'https://tixapmuo5.hn-bkt.clouddn.com/default/20260629/lab.jpg',
   )
 })

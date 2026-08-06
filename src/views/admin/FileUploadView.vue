@@ -49,6 +49,16 @@
         </div>
         <p class="upload-text">点击或拖拽文件到此区域上传</p>
         <p class="upload-hint">支持单次上传多个文件，单个文件最大 2GB</p>
+        <el-alert
+          type="success"
+          :closable="false"
+          show-icon
+          class="upload-tip"
+        >
+          <template #title>
+            <strong>音视频上传建议：</strong>时长控制在 <strong>1 分钟以内</strong> 可让 AI 抽取到更精细的画面/语义细节。
+          </template>
+        </el-alert>
         <el-button type="primary" class="upload-btn" :disabled="!isQiniuBackendConfigured">
           {{ isQiniuBackendConfigured ? '选择文件' : '请先配置后端API' }}
         </el-button>
@@ -808,6 +818,11 @@ async function clearAll() {
   margin: 0;
 }
 
+.upload-tip {
+  max-width: 360px;
+  margin: 8px auto 12px;
+  text-align: left;
+}
 .upload-hint {
   font-size: clamp(0.7rem, 0.9vw, 0.85rem);
   color: rgba(255, 255, 255, 0.4);

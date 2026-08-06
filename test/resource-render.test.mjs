@@ -154,8 +154,8 @@ describe('完整管线：resource → store → ChatAttachment → DOM', () => {
     // 注：jsdom 默认 location.protocol = 'http:'，正是 dev 服务器的等价场景
     expect(window.location.protocol).toBe('http:')
     expect(resolveUrl('cdn.example.com/test.png')).toBe('https://cdn.example.com/test.png')
-    expect(resolveUrl('the04ztre.hn-bkt.clouddn.com/x.jpg')).toBe(
-      'https://the04ztre.hn-bkt.clouddn.com/x.jpg',
+    expect(resolveUrl('tixapmuo5.hn-bkt.clouddn.com/x.jpg')).toBe(
+      'https://tixapmuo5.hn-bkt.clouddn.com/x.jpg',
     )
     // 已带 scheme 的不动
     expect(resolveUrl('https://cdn.example.com/x.jpg')).toBe('https://cdn.example.com/x.jpg')

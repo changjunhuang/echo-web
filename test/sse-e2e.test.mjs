@@ -326,7 +326,7 @@ test('端到端：URL 不带 scheme 时，前端必须 resolveUrl() 才能用', 
   const srv = await startServer((res) => {
     const w = (s) => res.write(s)
     w(
-      `data: {"type":"resource","event_id":"a1b2c3d4e5f67890a1b2c3d4e5f67890","url":"the04ztre.hn-bkt.clouddn.com/default/20260629/lab.jpg","name":"拉布拉多.jpg","display_name":"拉布拉多.jpg","file_id":"F-1024","modality":"image","mime_type":"image/jpeg","chunk_index":0,"total_chunks":1}\n\n`,
+      `data: {"type":"resource","event_id":"a1b2c3d4e5f67890a1b2c3d4e5f67890","url":"tixapmuo5.hn-bkt.clouddn.com/default/20260629/lab.jpg","name":"拉布拉多.jpg","display_name":"拉布拉多.jpg","file_id":"F-1024","modality":"image","mime_type":"image/jpeg","chunk_index":0,"total_chunks":1}\n\n`,
     )
     w(`data: {"type":"done","full":"给你找到啦"}\n\n`)
     res.end()
@@ -335,7 +335,7 @@ test('端到端：URL 不带 scheme 时，前端必须 resolveUrl() 才能用', 
     const port = srv.address().port
     const collected = await postSse(port, { sessionId: 's1', message: 'x' })
     assert.equal(collected.resources.length, 1)
-    assert.equal(collected.resources[0].url, 'the04ztre.hn-bkt.clouddn.com/default/20260629/lab.jpg')
+    assert.equal(collected.resources[0].url, 'tixapmuo5.hn-bkt.clouddn.com/default/20260629/lab.jpg')
     // 前端必须用 resolveUrl() 拼接
     const finalUrl = collected.resources[0].url.startsWith('http')
       ? collected.resources[0].url

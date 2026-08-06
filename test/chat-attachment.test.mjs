@@ -277,8 +277,8 @@ test('resolveUrl：裸域名', () => {
   // 这是 spec 里的关键回归：绝不能让 <img src="cdn.example.com/foo.jpg"> 落到相对路径
   assert.equal(resolveUrl('cdn.example.com/foo.jpg'), 'https://cdn.example.com/foo.jpg')
   assert.equal(
-    resolveUrl('the04ztre.hn-bkt.clouddn.com/default/20260629/lab.jpg'),
-    'https://the04ztre.hn-bkt.clouddn.com/default/20260629/lab.jpg',
+    resolveUrl('tixapmuo5.hn-bkt.clouddn.com/default/20260629/lab.jpg'),
+    'https://tixapmuo5.hn-bkt.clouddn.com/default/20260629/lab.jpg',
   )
 })
 

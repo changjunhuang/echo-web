@@ -236,12 +236,15 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus, EditPen, Delete, UserFilled, Document, Picture, VideoPlay, Microphone, View, Download } from '@element-plus/icons-vue'
 import { storeToRefs } from 'pinia'
 import { useRolesStore } from '@/stores/roles'
+import { useAuthStore } from '@/stores/auth'
+import request from '@/api'
 import * as uploadApi from '@/api/upload'
 import type { MemoryFileItem } from '@/api/upload'
 import { normalizeAssetUrl } from '@/utils/url'
 
 const rolesStore = useRolesStore()
 const { currentRoleId } = storeToRefs(rolesStore)
+const authStore = useAuthStore()
 
 const TAB_ALL = 0
 const TAB_TEXT = 1
@@ -487,8 +490,12 @@ function onPreviewClosed() {
 /**
  * 触发浏览器下载。
  * - 文本类型：把 desc 打包成 Blob 后下载（统一为 .txt 后缀，避免无后缀文件被系统拒收）
- * - 媒体类型：通过 fetch 拿到二进制后再走 Blob 下载，规避跨域场景下
- *   <a download> 被部分浏览器忽略而直接打开链接的问题
+ * - 媒体类型：走后端 `/file/:id/download` 代理，由服务端通过七牛源站 API 拉取二进制
+ *   后流式转发给我们，再走 Blob 下载。
+ *
+ *   为什么不再直连 `row.url`：存储域名（如 `*.hn-bkt.clouddn.com`）可能在浏览器侧
+ *   DNS 解析失败 / 已下线 / 缺 CORS 头，导致 `fetch()` 直接抛 `Failed to fetch`；
+ *   走自家代理后这条链路完全在我们可控的网络里。
  */
 async function downloadFile(row: MemoryFileItem) {
   if (downloadingId.value !== null) return
@@ -501,18 +508,20 @@ async function downloadFile(row: MemoryFileItem) {
       ElMessage.success(`已开始下载「${row.fileName}」`)
       return
     }
-    if (!row.url) {
-      ElMessage.warning('该文件链接不可用，无法下载')
+    if (!row.key) {
+      ElMessage.warning('该文件没有可下载的媒体内容')
       return
     }
-    const assetUrl = normalizeAssetUrl(row.url)
-    if (!assetUrl) {
-      ElMessage.warning('该文件链接不可用，无法下载')
-      return
-    }
-    const res = await fetch(assetUrl)
-    if (!res.ok) throw new Error(`HTTP ${res.status}`)
-    const blob = await res.blob()
+    // 注意：responseType=blob 时，axios 拦截器 unwrap 一次后返回的就是 Blob 本体
+    const blob = (await request.get(`/file/${row.id}/download`, {
+      responseType: 'blob',
+      headers: { 'X-Session-Id': authStore.sessionId || '' },
+      // axios 默认会把非 2xx 走 reject 分支，由拦截器统一弹错；
+      // 这里把 validateStatus 放宽到全部状态，避免 blob 形态下"网络看着 200 但解析失败"
+      validateStatus: () => true,
+    })) as unknown as Blob
+    // 响应拦截器已经在 2xx 时返回 response.data，但当后端返回非 2xx JSON 错误时
+    // 拦截器走 reject 分支抛错；这里 catch 块会捕获，因此 blob 一定是真实文件
     triggerBlobDownload(blob, row.fileName)
     ElMessage.success(`已开始下载「${row.fileName}」`)
   } catch (err) {

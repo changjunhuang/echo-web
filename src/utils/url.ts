@@ -2,7 +2,7 @@
  * 规范化资源 URL。
  *
  * 背景：后端下发的 `file.url` 字段（如七牛云 CDN 地址）经常缺协议头，
- * 例如 `the04ztre.hn-bkt.clouddn.com/default/xxx.jpg`。
+ * 例如 `tixapmuo5.hn-bkt.clouddn.com/default/xxx.jpg`。
  * 浏览器会把这种 URL 当成相对路径，导致 `<img>` / `<video>` / `<audio>`
  * 加载失败，`fetch()` 也无法跨域请求。
  *
