@@ -16,6 +16,7 @@ import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 
 const SOURCE_URL = new URL('../src/api/chat.ts', import.meta.url)
+const UTILS_URL = new URL('../src/utils/url.ts', import.meta.url)
 const TYPES_URL = new URL('../src/types/chat.ts', import.meta.url)
 const STORE_URL = new URL('../src/stores/chat.ts', import.meta.url)
 const ATTACH_URL = new URL('../src/components/ChatAttachment.vue', import.meta.url)
@@ -566,7 +567,8 @@ test('端到端：7 种事件同流，每个 callback 各收到该管的那份',
 // ---------------------------------------------------------------------------
 
 test('resolveUrl：源文件实现包含三条分支（已带 scheme / 协议相对 / 裸域名）', async () => {
-  const src = await readFile(SOURCE_URL, 'utf-8')
+  // resolveUrl 已迁至 src/utils/url.ts（chat.ts 仅 re-export）
+  const src = await readFile(UTILS_URL, 'utf-8')
   // 1. 已带 scheme：直接返回
   assert.ok(src.includes('https?:\\/\\/'), '应使用 https? 正则匹配 scheme')
   // 2. 协议相对（// 开头）：仍跟随页面协议
@@ -625,8 +627,11 @@ test('types/chat.ts：新增 ChatContextInfo / ChatMemoryResult + 新 ChatAttach
 
 test('chat.ts：暴露 onResource + resolveUrl + 7 种事件分发', async () => {
   const src = await readFile(SOURCE_URL, 'utf-8')
-  // resolveUrl
-  assert.ok(src.includes('export function resolveUrl'), '应导出 resolveUrl')
+  // resolveUrl：已迁至 utils/url.ts，chat.ts 通过 re-export 兼容旧 import
+  assert.ok(
+    src.includes('export function resolveUrl') || src.includes('export { resolveUrl }'),
+    '应导出 resolveUrl（直接定义或 re-export 均可）',
+  )
   // 7 种 type 分支
   for (const t of ['context', 'resource', 'tool', 'prefix', 'delta', 'done', 'memory_extracted']) {
     assert.ok(src.includes(`case '${t}':`), `handleFrame 应识别 type=${t}`)

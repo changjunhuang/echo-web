@@ -28,3 +28,27 @@ export function normalizeAssetUrl(url: string | undefined | null): string {
   // 协议无关 URL：让浏览器跟随页面协议
   return `//${trimmed}`
 }
+
+/**
+ * 给后端返回的"裸 URL"补 scheme（强 HTTPS 版）。
+ *   - 已带 http/https → 原样返回
+ *   - 以 // 开头（协议相对）→ 用当前页协议补齐（继续跟随页面协议）
+ *   - 其他（裸域名）→ 默认拼 https://
+ *
+ * 关键决策：裸域名固定走 https:// 而不是 `window.location.protocol`，
+ * 因为后端 CDN 几乎都是 HTTPS-only；如果跟随页面协议，dev 环境
+ * （页面是 http://）会把图片解析成 http://，触发浏览器 mixed-content
+ * 拦截或 CDN 拒绝服务，导致图片预览功能彻底失效。
+ * 协议相对 (`//cdn/...`) 这种"主动跟随页面协议"的写法保持原意，仍然跟随。
+ *
+ * 绝对不要让 `<img src="cdn.example.com/foo.jpg">` 落到浏览器解析为相对路径。
+ */
+export function resolveUrl(url: string): string {
+  if (!url) return url
+  if (/^https?:\/\//i.test(url)) return url
+  // 协议相对：跟随当前页面协议（浏览器原生语义）
+  if (url.startsWith('//')) return `${window.location.protocol}${url}`
+  // 裸域名：默认 https://（CDN 资源通常 HTTPS；跟随 window.location.protocol 会
+  // 导致 dev 页（http://localhost）把图解析成 http://，CDN 不接受 / 浏览器拦截）
+  return `https://${url}`
+}
