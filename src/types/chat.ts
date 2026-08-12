@@ -41,13 +41,23 @@ export interface ChatAttachment {
 
 /** RAG / 检索上下文摘要（event=context）。
  *
- * 新协议只给计数（persona_len / core_count / l1_count），不再带 chunk 正文。
- * UI 上以"参考资料（n 条）"形式折叠展示，便于调试 RAG 命中情况。
+ * 协议字段：
+ *   - persona_len / l0_count / l1_count：计数（兼容老协议）
+ *   - persona / l0_items / l1_items：真实注入内容（方案 A 扩展）
+ *
+ * 实际内容只下发有限条数（persona 全部 / L0 最多 20 / L1 最多 10），
+ * 超出部分仅以计数展示，避免 SSE 帧过大。
  */
 export interface ChatContextInfo {
   personaLen: number
-  coreCount: number
+  l0Count: number
   l1Count: number
+  /** 人格原文（DEFAULT_PERSONA 或用户自定义人格），完整下发 */
+  persona?: string
+  /** L0 核心记忆条目（最多 20 条） */
+  l0Items?: string[]
+  /** L1 近期摘要条目（最多 10 条） */
+  l1Items?: string[]
 }
 
 /** 工具调用结果（event=tool）。
@@ -75,6 +85,40 @@ export interface ChatMemoryResult {
   error?: string
 }
 
+/** 流式思考过程（event=thinking）。
+ *
+ * 后端在以下阶段各自 yield 一条 thinking 事件，让前端能实时看到「AI 在干什么」：
+ *   - stage=intent          → 意图识别完成
+ *   - stage=context_build   → 构建人格 / L0 / L1 上下文
+ *   - stage=recall_search   → 回忆检索进行中
+ *   - stage=react_decision  → ReAct 工具决策中
+ *   - stage=cascade         → 进入大小模型级联生成
+ *
+ * 文本 ≤ 256 字，仅供前端折叠面板展示，不进入正文。
+ */
+export interface ChatThinkingEvent {
+  stage: 'intent' | 'context_build' | 'recall_search' | 'react_decision' | 'cascade' | string
+  text: string
+}
+
+/** 回忆检索命中详情（event=memory_recall）。
+ *
+ * 与 context（仅给计数）不同，本事件携带每条命中的 memoryId / topic / summary / similarity，
+ * 前端可在折叠面板中向用户展示「我翻到了哪些相关回忆」。
+ */
+export interface ChatRecallHit {
+  memoryId: string
+  topic: string
+  summary: string
+  similarity: number
+}
+
+/** 回忆检索结果（event=memory_recall）。 */
+export interface ChatMemoryRecall {
+  count: number
+  hits: ChatRecallHit[]
+}
+
 export interface Message {
   id: string
   role: 'user' | 'assistant' | 'system'
@@ -89,6 +133,10 @@ export interface Message {
   context?: ChatContextInfo
   /** 长期记忆抽取结果（event=memory_extracted），仅 toast 提示 */
   memoryResult?: ChatMemoryResult
+  /** 思考过程事件流（event=thinking 累积），按时间顺序展示 */
+  thinkings?: ChatThinkingEvent[]
+  /** 回忆检索命中详情（event=memory_recall 累积） */
+  memoryRecall?: ChatMemoryRecall
   /** 消息来源：text = 键盘输入，voice = 语音识别；默认 text */
   source?: 'text' | 'voice'
   createdAt: number

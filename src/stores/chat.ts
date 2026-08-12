@@ -4,8 +4,10 @@ import { nanoid } from 'nanoid'
 import type {
   ChatAttachment,
   ChatContextInfo,
+  ChatMemoryRecall,
   ChatMemoryResult,
   ChatSession,
+  ChatThinkingEvent,
   ChatToolCall,
   Message,
 } from '@/types/chat'
@@ -247,6 +249,40 @@ export const useChatStore = defineStore('chat', () => {
     session.updatedAt = Date.now()
   }
 
+  /**
+   * 追加一条思考过程事件到指定会话最后一条 assistant 消息。
+   * - 多次触发会按时间顺序累积（前端展示时折叠按阶段分组）
+   * - stage 重复时只在第一次出现时记入，避免阶段重复触发刷屏
+   */
+  function appendMessageThinking(sessionId: string, ev: ChatThinkingEvent) {
+    if (!ev?.text) return
+    const session = sessions.value.find((s) => s.id === sessionId)
+    if (!session) return
+    const last = session.messages[session.messages.length - 1]
+    if (!last || last.role !== 'assistant') return
+    const list = last.thinkings ?? []
+    // 同 stage 仅保留首条，避免重连或重复事件刷屏
+    if (list.some((t) => t.stage === ev.stage)) {
+      return
+    }
+    last.thinkings = [...list, { stage: ev.stage, text: ev.text }]
+    session.updatedAt = Date.now()
+  }
+
+  /**
+   * 记录回忆检索命中详情到指定会话最后一条 assistant 消息。
+   * 覆盖式写入（一次响应通常只有一次 memory_recall 帧）。
+   */
+  function appendMessageMemoryRecall(sessionId: string, info: ChatMemoryRecall) {
+    if (!info) return
+    const session = sessions.value.find((s) => s.id === sessionId)
+    if (!session) return
+    const last = session.messages[session.messages.length - 1]
+    if (!last || last.role !== 'assistant') return
+    last.memoryRecall = info
+    session.updatedAt = Date.now()
+  }
+
   function clearSession(sessionId: string) {
     const session = sessions.value.find((s) => s.id === sessionId)
     if (session) {
@@ -285,6 +321,8 @@ export const useChatStore = defineStore('chat', () => {
     appendMessageToolCalls,
     appendMessageContext,
     appendMessageMemoryResult,
+    appendMessageThinking,
+    appendMessageMemoryRecall,
     clearSession,
   }
 })

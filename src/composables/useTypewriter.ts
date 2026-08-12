@@ -6,9 +6,11 @@
  *  - SSE 在 `reader.read()` 里会把多条 `data:` 帧攒成一坨同步回调，
  *    因此 onChunk 在同一微任务里被连续触发 N 次，msg.content 会一帧内
  *    涨到终态。打字机的存在就是把这些 burst 平铺到时间轴上。
- *  - 单字符切片会破坏 markdown 原子（如 `**bold**` 被拦腰切），所以切片
- *    是按"≤ N 字符/段"切的；如果一个 delta 段本身 > N，剩余部分回灌到
- *    队首——保证视觉节奏稳定、不破坏标记完整性。
+ *  - 现版本默认 **逐字打印**（charsPerTick=1，tickMs≈28），让用户看到
+ *    "一格一格蹦字"的效果，而不是整段/多字一喷。
+ *  - 单字符切片对 markdown 原子（如 `**bold**`）有一定切坏风险；切坏后
+ *    会显示短暂原文/源码态，被下一帧 v-html 渲染覆盖——这里以视觉流畅
+ *    度优先，因为闭合的标记会被立刻重新解析。
  *  - `stop(flush=true)` 是一次性 drain：在收到 done 帧 / 用户点停止 /
  *    网络错误时调用，丢弃节流立刻把剩余文字 push 出去，避免 UI 显示
  *    滞后于真实收尾。
@@ -16,9 +18,9 @@
  */
 
 export interface TypewriterOptions {
-  /** 每次 append 的字符上限。超过此长度的 delta 会被切片为多段。默认 6 ≈ 每秒 200 字 (25ms 一拍) */
+  /** 每次 append 的字符上限。默认 1（真正逐字）。曾用 6（25ms 一拍≈200 字/秒）。 */
   charsPerTick?: number
-  /** tick 间隔（毫秒）。默认 25 */
+  /** tick 间隔（毫秒）。默认 28。逐字时再小会让眼睛跟不上，再大会感觉"卡顿"。 */
   tickMs?: number
   /** 把节奏出来的字符追加到这里（一般直接 `msg.content += text`） */
   onAppend: (chunk: string) => void
@@ -39,8 +41,8 @@ export interface TypewriterHandle {
 }
 
 export function createTypewriter(opts: TypewriterOptions): TypewriterHandle {
-  const charsPerTick = Math.max(1, opts.charsPerTick ?? 6)
-  const tickMs = Math.max(1, opts.tickMs ?? 25)
+  const charsPerTick = Math.max(1, opts.charsPerTick ?? 1)
+  const tickMs = Math.max(1, opts.tickMs ?? 28)
   const queue: string[] = []
   let timer: ReturnType<typeof setTimeout> | null = null
 

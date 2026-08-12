@@ -274,6 +274,18 @@
                     :info="msg.context"
                     class="message-context"
                   />
+                  <!-- 思考过程 + 回忆命中详情（event=thinking / event=memory_recall）：
+                       流式中默认展开，结束后折叠；DeepSeek 风格展示。
+                       reasoning 文本通过 streamingReasoningText 实时打字，仅在当前
+                       流式消息生效（其他历史消息自然走 store 累积的 thinkings）。 -->
+                  <ChatProcess
+                    v-if="msg.role === 'assistant' && ((msg.thinkings && msg.thinkings.length) || msg.memoryRecall)"
+                    :thinkings="msg.thinkings"
+                    :recall="msg.memoryRecall"
+                    :is-streaming="msg.id === streamingMessageId"
+                    :streaming-reasoning="msg.id === streamingMessageId ? streamingReasoningText : ''"
+                    class="message-process"
+                  />
                   <!-- 工具调用（event=tool 累积）：逐条可折叠 -->
                   <ChatToolCall
                     v-if="msg.role === 'assistant' && msg.toolCalls && msg.toolCalls.length"
@@ -639,6 +651,7 @@ import PixelScene from '@/components/PixelScene.vue'
 import ChatImage from '@/components/ChatImage.vue'
 import ChatAttachment from '@/components/ChatAttachment.vue'
 import ChatContext from '@/components/ChatContext.vue'
+import ChatProcess from '@/components/ChatProcess.vue'
 import ChatToolCall from '@/components/ChatToolCall.vue'
 import { detectEmotion, EMOTION_LABELS, type Emotion } from '@/utils/emotion'
 
@@ -705,10 +718,10 @@ const shouldResumeListening = ref(false)
 /**
  * 关键问题：SSE 在 reader.read() 里会把多条 `data:` 帧攒成一坨同步回调，
  * 多条 onChunk 在同一微任务里被连续调用，msg.content 一帧内涨到终态
- * → 用户看到的是"瞬间满屏"，不是逐字/逐段打字。
+ * → 用户看到的是"瞬间满屏"，不是逐字打字。
  *
  * 修复：在 SSE → msg.content 之间插一个"打字机节流器"，让 delta 按固定
- * 节奏（25ms / 拍，每拍最多 6 字符）喂到 UI 上。
+ * 节奏（28ms / 拍，每拍 1 字符）喂到 UI 上，真正呈现"逐字蹦出"的效果。
  * 流式消息有内容期间在气泡内显示一个闪烁光标 `▍`。
  */
 const streamingMessageId = ref<string | null>(null)
@@ -718,8 +731,8 @@ function startStreamingTypewriter(messageId: string, sink: (chunk: string) => vo
   if (typewriter) typewriter.stop(true)
   streamingMessageId.value = messageId
   typewriter = createTypewriter({
-    charsPerTick: 6,
-    tickMs: 25,
+    charsPerTick: 1,
+    tickMs: 28,
     onAppend: sink,
     onIdle: () => {
       // 队列自然清空（极少触发——done/error 时走 stop flush，不依赖这里）
@@ -732,6 +745,44 @@ function stopStreamingTypewriter(flush: boolean, sink?: (chunk: string) => void)
   typewriter.stop(flush, sink)
   typewriter = null
   streamingMessageId.value = null
+}
+
+/* ---- 思考打字机（model_reasoning 内容逐字呈现） ---- */
+/**
+ * 模型思考正文（event=thinking stage=model_reasoning）通常一次下发数百字符，
+ * 直接渲染会"瞬间满屏"。这里再接一层打字机，让思考内容也按节奏逐字呈现，
+ * 视觉上更像 DeepSeek：思考区在「思考中…」状态下持续蹦字。
+ *
+ * 与正文打字机的区别：
+ *   - 速度更快（20ms/tick × 2 字符）≈ 100 字/秒，避免长思考内容等待过久
+ *   - 输出目标不是 msg.content，而是独立的 streamingReasoningText ref，
+ *     ChatProcess.vue 直接读取这个 ref 渲染"模型思考"区
+ *   - stage 事件（intent / context_build / recall_search / react_decision /
+ *     cascade）走原始 store.appendMessageThinking，不进打字机——它们是离散
+ *     状态标签，应即时显示，不应逐字蹦
+ */
+const streamingReasoningText = ref('')
+let reasoningTypewriter: ReturnType<typeof createTypewriter> | null = null
+
+function startReasoningTypewriter(sink: (chunk: string) => void) {
+  if (reasoningTypewriter) reasoningTypewriter.stop(true)
+  streamingReasoningText.value = ''
+  reasoningTypewriter = createTypewriter({
+    charsPerTick: 2,
+    tickMs: 20,
+    onAppend: sink,
+  })
+}
+
+function pushReasoning(text: string) {
+  if (!reasoningTypewriter) return
+  reasoningTypewriter.push(text)
+}
+
+function stopReasoningTypewriter(flush: boolean, sink?: (text: string) => void) {
+  if (!reasoningTypewriter) return
+  reasoningTypewriter.stop(flush, sink)
+  reasoningTypewriter = null
 }
 
 /* ---- 语音识别（STT，连续模式 + VAD 断句） ---- */
@@ -1187,6 +1238,12 @@ async function handleSend() {
     scrollToBottom()
   })
 
+  // 同时启动"思考打字机"：model_reasoning 思考内容会逐字进入 streamingReasoningText，
+  // ChatProcess.vue 读这个 ref 渲染实时思考区
+  startReasoningTypewriter((chunk) => {
+    streamingReasoningText.value += chunk
+  })
+
   const messageString = session.messages
     .filter((m) => m.id !== assistantMsg.id)
     .filter((m) => m.content && m.content.trim().length > 0)
@@ -1234,12 +1291,30 @@ async function handleSend() {
         if (result.ok) ElMessage.success('已提取长期记忆')
         else ElMessage.warning(`长期记忆提取失败${result.error ? `：${result.error}` : ''}`)
       },
+      // 思考过程：按时间顺序累积到 assistant 消息的 thinkings[] 字段，
+      // UI 折叠面板里展示"AI 在做什么"。
+      // model_reasoning 阶段的正文（模型真实思考内容）额外走打字机，
+      // 让"模型思考"区也能像回答一样逐字呈现（DeepSeek 风格）。
+      onThinking: (ev) => {
+        chatStore.appendMessageThinking(localSessionId, ev)
+        if (ev.stage === 'model_reasoning') {
+          pushReasoning(ev.text)
+        }
+        scrollToBottom()
+      },
+      // 回忆检索命中详情：覆盖写入 memoryRecall（一次响应通常一次）
+      onRecall: (info) => {
+        chatStore.appendMessageMemoryRecall(localSessionId, info)
+        scrollToBottom()
+      },
       onDone: () => {
         // 收尾：先把打字机里剩余的字符 flush，再走 TTS / 恢复录音的逻辑，
         // 避免 tts.speak(lastMsg.content) 拿到截断的文本。
         stopStreamingTypewriter(true, (rest) => {
           lastMsg.content += rest
         })
+        // 收尾：思考打字机也 flush，确保已排队字符全部显示
+        stopReasoningTypewriter(true)
         chatStore.isStreaming = false
         abortController = null
         // 流式完成：若开启了自动播报，朗读最后一条 assistant 消息
@@ -1262,6 +1337,7 @@ async function handleSend() {
         stopStreamingTypewriter(true, (rest) => {
           lastMsg.content += rest
         })
+        stopReasoningTypewriter(true)
         chatStore.isStreaming = false
         abortController = null
         ElMessage.error(`请求失败: ${error.message}`)
@@ -1278,6 +1354,7 @@ function handleStop() {
   const session = chatStore.currentSession
   const lastMsg = session?.messages[session.messages.length - 1]
   stopStreamingTypewriter(true, lastMsg ? (rest) => (lastMsg.content += rest) : undefined)
+  stopReasoningTypewriter(true)
   chatStore.isStreaming = false
   abortController = null
   // 手动停流：onDone 不会触发，这里手动决定是否恢复录音

@@ -4,13 +4,15 @@
  * 协议格式（详见后端规范 v1）：
  *   - 每条 SSE 帧只有一行 `data: {"type": "...", ...}`，**不带** `event:` 行
  *   - 事件类型（按 `type` 字段分发）：
- *       context          → RAG / 检索上下文摘要（{persona_len, core_count, l1_count}）
+ *       context          → RAG / 检索上下文摘要（{persona_len, l0_count, l1_count} + 方案 A 扩展 {persona, l0_items, l1_items}）
  *       resource         → 附件（图片/音频/视频/文件），可多次，按 file_id+chunk_index 去重
  *       tool             → 工具调用结果（{name, iter, ok, summary}）
- *       prefix           → 级联小模型前缀（{text}，当前默认空字符串）
+ *       prefix           → 级联小模型前缀（{text}），流式逐字下发
  *       delta            → 大模型增量文本（{text}，必须 append）
  *       done             → 整轮结束（{full} 已含完整文本与"附件：" markdown 段落）
  *       memory_extracted → 长期记忆抽取（{ok} 或 {ok:false, error}），仅 stream=false 时出现
+ *       thinking         → 流式思考过程（{stage, text}），让前端能看到"AI 在干什么"
+ *       memory_recall    → 回忆检索命中详情（{count, hits:[{memory_id, topic, summary, similarity}]}）
  *   - 资源 URL **不带 scheme**（后端正则清掉 http/https/ //），前端必须调 resolveUrl() 拼接
  *
  * 关键实现：
@@ -23,9 +25,11 @@ import request from './index'
 import type {
   ChatAttachment,
   ChatContextInfo,
+  ChatMemoryRecall,
   ChatMemoryResult,
   ChatRequest,
   ChatResponse,
+  ChatThinkingEvent,
   ChatToolCall,
 } from '@/types/chat'
 
@@ -151,19 +155,26 @@ export function resolveUrl(url: string): string {
  * 帧归一化：把 {type, ...} 的 data 解析成强类型对象
  * ====================================================================== */
 
-/** context 帧归一化：{persona_len, core_count, l1_count} */
+/** context 帧归一化：{persona_len, l0_count, l1_count} + 方案 A 扩展 {persona, l0_items, l1_items} */
 function parseContextInfo(data: string): ChatContextInfo | null {
   const obj = safeJsonParse(data)
   if (!obj) return null
   const personaLen = typeof obj.persona_len === 'number' ? obj.persona_len : undefined
-  const coreCount = typeof obj.core_count === 'number' ? obj.core_count : undefined
+  const l0Count = typeof obj.l0_count === 'number' ? obj.l0_count : undefined
   const l1Count = typeof obj.l1_count === 'number' ? obj.l1_count : undefined
   // 三个字段都没有 → 视为无效帧
-  if (personaLen === undefined && coreCount === undefined && l1Count === undefined) return null
+  if (personaLen === undefined && l0Count === undefined && l1Count === undefined) return null
   return {
     personaLen: personaLen ?? 0,
-    coreCount: coreCount ?? 0,
+    l0Count: l0Count ?? 0,
     l1Count: l1Count ?? 0,
+    persona: typeof obj.persona === 'string' ? obj.persona : undefined,
+    l0Items: Array.isArray(obj.l0_items)
+      ? (obj.l0_items.filter((x: unknown) => typeof x === 'string') as string[])
+      : undefined,
+    l1Items: Array.isArray(obj.l1_items)
+      ? (obj.l1_items.filter((x: unknown) => typeof x === 'string') as string[])
+      : undefined,
   }
 }
 
@@ -233,6 +244,37 @@ function parseMemoryResult(data: string): ChatMemoryResult | null {
   return { ok, error }
 }
 
+/** thinking 帧归一化：{stage, text}。stage 缺失时降级为 'unknown'。 */
+function parseThinkingEvent(data: string): ChatThinkingEvent | null {
+  const obj = safeJsonParse(data)
+  if (!obj) return null
+  const stage = typeof obj.stage === 'string' && obj.stage ? obj.stage : 'unknown'
+  const text = typeof obj.text === 'string' ? obj.text : ''
+  if (!text) return null
+  return { stage, text }
+}
+
+/** memory_recall 帧归一化：{count, hits:[{memory_id, topic, summary, similarity}]} */
+function parseMemoryRecall(data: string): ChatMemoryRecall | null {
+  const obj = safeJsonParse(data)
+  if (!obj) return null
+  const count = typeof obj.count === 'number' ? obj.count : 0
+  const rawHits = Array.isArray(obj.hits) ? obj.hits : []
+  const hits = rawHits
+    .map((h) => {
+      if (!h || typeof h !== 'object') return null
+      const o = h as Record<string, unknown>
+      return {
+        memoryId: typeof o.memory_id === 'string' ? o.memory_id : '',
+        topic: typeof o.topic === 'string' ? o.topic : '',
+        summary: typeof o.summary === 'string' ? o.summary : '',
+        similarity: typeof o.similarity === 'number' ? o.similarity : 0,
+      }
+    })
+    .filter((h): h is ChatMemoryRecall['hits'][number] => h !== null)
+  return { count: count || hits.length, hits }
+}
+
 /** done 帧归一化：{full, sessionId} */
 function parseDonePayload(data: string): { full?: string; sessionId?: string } {
   const obj = safeJsonParse(data)
@@ -266,14 +308,16 @@ export function sendChatMessage(payload: ChatRequest): Promise<ChatResponse> {
  * SSE 流式对话：返回 AbortController，调用方可在需要时中止。
  *
  * options 形态（避免位置参数无限膨胀）：
- *   - onChunk:     每个 delta 增量片段（拼进 assistant 消息）
- *   - onPrefix:    级联小模型前缀（与 delta 走同一通道）
- *   - onContext:   RAG / 检索上下文摘要（persona / L0 / L1 计数）
- *   - onTool:      工具调用结果（单条）
- *   - onResource:  附件资源（单条，按 file_id+chunk_index 去重由调用方负责）
- *   - onMemory:    长期记忆抽取结果（成功 / 失败 + error）
- *   - onDone:      收到 done 帧；payload = {full?, sessionId?}
- *   - onError:     解析 / 网络错误（已忽略 AbortError）
+ *   - onChunk:      每个 delta 增量片段（拼进 assistant 消息）
+ *   - onPrefix:     级联小模型前缀（与 delta 走同一通道）
+ *   - onContext:    RAG / 检索上下文摘要（persona / L0 / L1 计数）
+ *   - onTool:       工具调用结果（单条）
+ *   - onResource:   附件资源（单条，按 file_id+chunk_index 去重由调用方负责）
+ *   - onMemory:     长期记忆抽取结果（成功 / 失败 + error）
+ *   - onThinking:   思考过程事件（{stage, text}，可多次）
+ *   - onRecall:     回忆检索命中详情（{count, hits}）
+ *   - onDone:       收到 done 帧；payload = {full?, sessionId?}
+ *   - onError:      解析 / 网络错误（已忽略 AbortError）
  *
  * 任一 callback 缺省（undefined）都不会被调用，不抛错。
  */
@@ -284,6 +328,8 @@ export interface SendChatStreamOptions {
   onTool?: (toolCall: ChatToolCall) => void
   onResource?: (resource: ChatAttachment) => void
   onMemory?: (info: ChatMemoryResult) => void
+  onThinking?: (event: ChatThinkingEvent) => void
+  onRecall?: (info: ChatMemoryRecall) => void
   onDone?: (payload: { full?: string; sessionId?: string }) => void
   onError?: (error: Error) => void
 }
@@ -292,16 +338,9 @@ export function sendChatMessageStream(
   payload: ChatRequest,
   options: SendChatStreamOptions = {},
 ): AbortController {
-  const {
-    onChunk,
-    onPrefix,
-    onContext,
-    onTool,
-    onResource,
-    onMemory,
-    onDone,
-    onError,
-  } = options
+  // 注意：所有 callback 都通过 `options` 透传到 dispatchByType / handleFrame 的 wrap，
+  // 这里不要再解构出单个变量，避免 noUnusedLocals 报错。
+  const { onDone, onError } = options
   const controller = new AbortController()
   const baseURL = import.meta.env.VITE_API_BASE_URL || '/api'
   const url = `${baseURL}/chat`
@@ -445,10 +484,13 @@ function handleFrame(
       const info = parseContextInfo(data)
       if (info) {
         console.info(
-          '[sse] ← context, persona=%d, core=%d, l1=%d',
+          '[sse] ← context, persona=%d, l0=%d, l1=%d, personaLen=%d, l0Items=%d, l1Items=%d',
           info.personaLen,
-          info.coreCount,
+          info.l0Count,
           info.l1Count,
+          info.persona?.length ?? 0,
+          info.l0Items?.length ?? 0,
+          info.l1Items?.length ?? 0,
         )
         h.onContext?.(info)
       }
@@ -511,6 +553,22 @@ function handleFrame(
       if (m) {
         console.info('[sse] ← memory_extracted, ok=%s', m.ok)
         h.onMemory?.(m)
+      }
+      return
+    }
+    case 'thinking': {
+      const t = parseThinkingEvent(data)
+      if (t) {
+        console.info('[sse] ← thinking, stage=%s, text=%s', t.stage, t.text)
+        h.onThinking?.(t)
+      }
+      return
+    }
+    case 'memory_recall': {
+      const r = parseMemoryRecall(data)
+      if (r) {
+        console.info('[sse] ← memory_recall, count=%d', r.count)
+        h.onRecall?.(r)
       }
       return
     }
