@@ -10,6 +10,7 @@ import type { RecallMemoryItem } from '@/api/memory'
 import { getMemoryDetail } from '@/api/memory'
 import { normalizeAssetUrl } from '@/utils/url'
 import { copyToClipboard } from '@/utils/clipboard'
+import { downloadWith } from '@/utils/download'
 import { DocumentCopy } from '@element-plus/icons-vue'
 
 const props = defineProps<{ target: RecallMemoryItem }>()
@@ -17,6 +18,8 @@ const emit = defineEmits<{ (e: 'close'): void }>()
 
 const detail = ref<RecallMemoryItem | null>(null)
 const mdText = ref<string>('')
+const downloadingFileKey = ref<string | null>(null)
+const downloadingMd = ref(false)
 
 async function load() {
   const d = await getMemoryDetail(props.target.memoryId)
@@ -36,35 +39,63 @@ async function load() {
   }
 }
 
-function downloadFile(fileName: string, url: string | undefined) {
-  const assetUrl = normalizeAssetUrl(url)
-  if (!assetUrl) {
-    ElMessage.warning('该文件无可用下载链接')
+/**
+ * 源文件下载（托管式）。
+ *
+ * 通过 POST /api/file/authorize 走 memory_source 授权分支：
+ *   - 后端校验 memoryId 归属 + fileKey 真在该记忆下
+ *   - 签发 60s 短期 URL + HMAC(ip_sig) + 落 audit_log
+ *   - 返回 url，前端 window.location.href 触发浏览器直连七牛
+ */
+async function downloadFile(fileName: string, fileKey: string | undefined) {
+  if (!fileKey) {
+    ElMessage.warning('该文件没有可下载的 key')
     return
   }
-  fetch(assetUrl)
-    .then((r) => r.blob())
-    .then((b) => {
-      const a = document.createElement('a')
-      a.href = URL.createObjectURL(b)
-      a.download = fileName
-      a.click()
-      URL.revokeObjectURL(a.href)
+  if (downloadingFileKey.value !== null) return
+  downloadingFileKey.value = fileKey
+  const loadingRef = { set: (b: boolean) => { if (!b) downloadingFileKey.value = null } }
+  try {
+    await downloadWith({
+      kind: 'authorized',
+      req: {
+        resourceType: 'memory_source',
+        memoryId: props.target.memoryId,
+        fileKey,
+      },
+      loading: loadingRef,
     })
-    .catch(() => ElMessage.error('下载失败'))
+  } finally {
+    if (downloadingFileKey.value === fileKey) downloadingFileKey.value = null
+  }
 }
 
-function downloadMd() {
+/**
+ * md 下载（托管式）。
+ *
+ * 与源文件走同一套授权：POST /api/file/authorize(resourceType=memory_md) → 后端签发
+ * HMAC ticket URL（/api/memory/:id/md-file?ticket=...）→ 浏览器跳转 → 后端代理层校验
+ * ticket 后从 DB 读 md_content 流式返回 Content-Disposition: attachment。
+ *
+ * 优点：
+ *   - 统一审计：所有下载都在 audit_log 落一条 ok
+ *   - 统一安全：60s 过期 + IP 锁由 HMAC ticket 兜底（不依赖前端 JS）
+ *   - 浏览器直链体验：与媒体文件一致，都是 window.location.href
+ */
+async function downloadMd() {
+  if (downloadingMd.value) return
   if (!mdText.value) {
-    ElMessage.warning('暂无 md')
+    ElMessage.warning('暂无 md（可能 AI 解析尚未完成）')
     return
   }
-  const blob = new Blob([mdText.value], { type: 'text/markdown;charset=utf-8' })
-  const a = document.createElement('a')
-  a.href = URL.createObjectURL(blob)
-  a.download = `${props.target.memoryId}.md`
-  a.click()
-  URL.revokeObjectURL(a.href)
+  await downloadWith({
+    kind: 'authorized',
+    req: {
+      resourceType: 'memory_md',
+      memoryId: props.target.memoryId,
+    },
+    loading: { set: (b: boolean) => { downloadingMd.value = b } },
+  })
 }
 
 async function copyText(text: string, label: string) {
@@ -119,8 +150,17 @@ onMounted(load)
           <div v-for="f in detail.sourceFiles" :key="f.fileKey" class="file-item">
             <el-tag size="small">{{ fileTypeLabel(f.fileType) }}</el-tag>
             <span class="fname">{{ f.fileName }}</span>
-            <el-button size="small" link type="primary" @click="downloadFile(f.fileName, f.url)">
-              下载
+            <el-button
+              size="small"
+              link
+              type="primary"
+              :class="{ 'dl-btn--busy': downloadingFileKey === f.fileKey }"
+              :disabled="downloadingFileKey !== null"
+              @click="downloadFile(f.fileName, f.fileKey)"
+            >
+              <span class="dl-btn__label" :class="{ 'is-busy': downloadingFileKey === f.fileKey }">
+                {{ downloadingFileKey === f.fileKey ? '准备中' : '下载' }}
+              </span>
             </el-button>
           </div>
           <p v-if="!detail.sourceFiles?.length" class="muted">（无源文件）</p>
@@ -130,7 +170,18 @@ onMounted(load)
       <section>
         <h4>
           记忆内容（md）
-          <el-button size="small" link type="primary" @click="downloadMd">下载 md</el-button>
+          <el-button
+            size="small"
+            link
+            type="primary"
+            :class="{ 'dl-btn--busy': downloadingMd }"
+            :disabled="downloadingMd"
+            @click="downloadMd"
+          >
+            <span class="dl-btn__label" :class="{ 'is-busy': downloadingMd }">
+              {{ downloadingMd ? '准备中' : '下载 md' }}
+            </span>
+          </el-button>
           <el-tooltip v-if="mdText" content="复制记忆内容" placement="top">
             <el-icon class="copy-icon" @click="copyText(mdText, '记忆内容')">
               <DocumentCopy />
@@ -239,5 +290,37 @@ export default { methods: { fileTypeLabel, parseStatusLabel } }
 }
 .muted {
   color: rgba(255, 255, 255, 0.5);
+}
+
+/* ====== 下载按钮准备中态：脉冲小圆点替代 Element Plus 默认 spinner ======= */
+.dl-btn--busy {
+  cursor: progress;
+}
+.dl-btn__label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+.dl-btn__label.is-busy {
+  color: rgba(22, 93, 255, 0.55);
+  font-weight: 500;
+}
+.dl-btn__label.is-busy::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  animation: dlPulse 1.2s ease-in-out infinite;
+}
+@keyframes dlPulse {
+  0%, 100% {
+    transform: scale(0.6);
+    opacity: 0.4;
+  }
+  50% {
+    transform: scale(1);
+    opacity: 1;
+  }
 }
 </style>

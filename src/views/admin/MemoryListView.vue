@@ -21,6 +21,8 @@
     </div>
 
     <el-tabs v-model="activeTab" class="memory-tabs" @tab-change="reload">
+
+
       <el-tab-pane
         v-for="tab in TABS"
         :key="tab.value"
@@ -91,8 +93,7 @@
               plain
               :icon="Download"
               :disabled="!canDownload(row) || downloadingId === row.id"
-              :loading="downloadingId === row.id"
-              class="op-btn"
+              :class="['op-btn', { 'op-btn--busy': downloadingId === row.id }]"
               @click="downloadFile(row)"
             />
           </el-tooltip>
@@ -236,15 +237,13 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus, EditPen, Delete, UserFilled, Document, Picture, VideoPlay, Microphone, View, Download } from '@element-plus/icons-vue'
 import { storeToRefs } from 'pinia'
 import { useRolesStore } from '@/stores/roles'
-import { useAuthStore } from '@/stores/auth'
-import request from '@/api'
 import * as uploadApi from '@/api/upload'
 import type { MemoryFileItem } from '@/api/upload'
 import { normalizeAssetUrl } from '@/utils/url'
+import { downloadBlob, downloadWith } from '@/utils/download'
 
 const rolesStore = useRolesStore()
 const { currentRoleId } = storeToRefs(rolesStore)
-const authStore = useAuthStore()
 
 const TAB_ALL = 0
 const TAB_TEXT = 1
@@ -488,23 +487,24 @@ function onPreviewClosed() {
 }
 
 /**
- * 触发浏览器下载。
+ * 触发浏览器下载（托管式下载）。
  * - 文本类型：把 desc 打包成 Blob 后下载（统一为 .txt 后缀，避免无后缀文件被系统拒收）
- * - 媒体类型：走后端 `/file/:id/download` 代理，由服务端通过七牛源站 API 拉取二进制
- *   后流式转发给我们，再走 Blob 下载。
+ * - 媒体类型：走 POST /api/file/authorize 拿 60s 短期 URL → 302 直连七牛
  *
- *   为什么不再直连 `row.url`：存储域名（如 `*.hn-bkt.clouddn.com`）可能在浏览器侧
- *   DNS 解析失败 / 已下线 / 缺 CORS 头，导致 `fetch()` 直接抛 `Failed to fetch`；
- *   走自家代理后这条链路完全在我们可控的网络里。
+ *   为什么改成授权而非直连 row.url 或自家代理：
+ *     - row.url 是公网 GetPublicURL 拼出的地址，可能 DNS 解析失败 / 缺 CORS
+ *     - 自家代理（旧的 /file/:id/download）已标记 Deprecated，仍兼容但不再走
+ *     - 新方案由后端做归属校验 + HMAC(ip_sig) + audit_log；前端只负责跳转
  */
 async function downloadFile(row: MemoryFileItem) {
   if (downloadingId.value !== null) return
   downloadingId.value = row.id
+  const loadingRef = { set: (b: boolean) => { if (!b) downloadingId.value = null } }
   try {
     if (row.fileType === TAB_TEXT) {
       const blob = new Blob([row.desc ?? ''], { type: 'text/plain;charset=utf-8' })
       const name = row.fileName.toLowerCase().endsWith('.txt') ? row.fileName : `${row.fileName}.txt`
-      triggerBlobDownload(blob, name)
+      downloadBlob(blob, name)
       ElMessage.success(`已开始下载「${row.fileName}」`)
       return
     }
@@ -512,39 +512,17 @@ async function downloadFile(row: MemoryFileItem) {
       ElMessage.warning('该文件没有可下载的媒体内容')
       return
     }
-    // 注意：responseType=blob 时，axios 拦截器 unwrap 一次后返回的就是 Blob 本体
-    const blob = (await request.get(`/file/${row.id}/download`, {
-      responseType: 'blob',
-      headers: { 'X-Session-Id': authStore.sessionId || '' },
-      // axios 默认会把非 2xx 走 reject 分支，由拦截器统一弹错；
-      // 这里把 validateStatus 放宽到全部状态，避免 blob 形态下"网络看着 200 但解析失败"
-      validateStatus: () => true,
-    })) as unknown as Blob
-    // 响应拦截器已经在 2xx 时返回 response.data，但当后端返回非 2xx JSON 错误时
-    // 拦截器走 reject 分支抛错；这里 catch 块会捕获，因此 blob 一定是真实文件
-    triggerBlobDownload(blob, row.fileName)
-    ElMessage.success(`已开始下载「${row.fileName}」`)
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : '未知错误'
-    ElMessage.error(`下载失败：${msg}`)
-    console.warn('[memory] download failed:', msg)
+    const { ok } = await downloadWith({
+      kind: 'authorized',
+      req: { resourceType: 'file', resourceId: row.id },
+      loading: loadingRef,
+    })
+    if (!ok) {
+      console.warn('[memory] download failed for id=%d', row.id)
+    }
   } finally {
-    downloadingId.value = null
+    if (downloadingId.value === row.id) downloadingId.value = null
   }
-}
-
-function triggerBlobDownload(blob: Blob, name: string) {
-  const url = URL.createObjectURL(blob)
-  const a = document.createElement('a')
-  a.href = url
-  a.download = name
-  // 某些浏览器即使 a.download 仍会新窗口打开，再加 rel=noopener 兜底
-  a.rel = 'noopener noreferrer'
-  document.body.appendChild(a)
-  a.click()
-  document.body.removeChild(a)
-  // 给浏览器一点时间真正发出请求再回收 URL
-  setTimeout(() => URL.revokeObjectURL(url), 1500)
 }
 
 // 删除文件
@@ -957,6 +935,25 @@ onMounted(() => {
   padding: 0 6px !important;
   height: 20px !important;
   line-height: 18px !important;
+}
+
+/* ---------- 下载按钮准备中态：脉冲小圆点替代 Element Plus 默认 spinner ---------- */
+.op-btn--busy {
+  cursor: progress !important;
+}
+.op-btn--busy .el-icon {
+  animation: dlPulse 1.2s ease-in-out infinite;
+  color: rgba(22, 93, 255, 0.6);
+}
+@keyframes dlPulse {
+  0%, 100% {
+    transform: scale(0.7);
+    opacity: 0.5;
+  }
+  50% {
+    transform: scale(1.1);
+    opacity: 1;
+  }
 }
 
 /* ---------- 预览弹框 ---------- */

@@ -22,6 +22,7 @@ import { ElMessage } from 'element-plus'
 import { Download, View, CopyDocument } from '@element-plus/icons-vue'
 import { resolveUrl as resolve } from '@/api/chat'
 import type { ChatAttachment } from '@/types/chat'
+import { downloadWith } from '@/utils/download'
 
 const props = withDefaults(
   defineProps<{
@@ -140,10 +141,25 @@ async function handleCopyUrl(att: ChatAttachment) {
   }
 }
 
-/** 触发浏览器下载 */
+/** 触发浏览器下载（托管式：优先走 fileId 授权，缺失时回退到旧 fetch+blob 路径） */
 async function handleDownload(att: ChatAttachment) {
-  const url = src(att)
   const downloadName = att.displayName || att.name || 'download'
+
+  // 1. 优先：SSE 帧带了 fileId → 走授权
+  if (att.fileId) {
+    const { ok } = await downloadWith({
+      kind: 'authorized',
+      req: { resourceType: 'file', resourceId: att.fileId },
+    })
+    if (ok) return
+    // 失败时不立刻回退到旧路径，避免重复下载提示
+    console.warn('[attachment] authorized download failed for fileId=%s', att.fileId)
+    return
+  }
+
+  // 2. 回退：旧 SSE 帧不带 fileId（早期实现）→ 走 fetch+blob+anchor。
+  //    这一路径保留是因为部分历史会话可能不含 fileId；后续 SSE 协议统一后会消失。
+  const url = src(att)
   if (!url) {
     ElMessage.warning('该附件没有可下载的链接')
     return
@@ -162,7 +178,7 @@ async function handleDownload(att: ChatAttachment) {
       document.body.removeChild(a)
       setTimeout(() => URL.revokeObjectURL(objectUrl), 1000)
       ElMessage.success(`已下载 ${downloadName}`)
-      console.info('[attachment] downloaded via blob: name=%s size=%d', downloadName, blob.size)
+      console.info('[attachment] fallback downloaded via blob: name=%s size=%d', downloadName, blob.size)
       return
     }
     console.warn('[attachment] fetch returned %d, fallback to anchor: name=%s', res.status, downloadName)
