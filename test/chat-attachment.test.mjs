@@ -295,12 +295,9 @@ test('chat.ts：暴露 onResource 回调', async () => {
   )
 })
 
-test('chat.ts：导出 resolveUrl（直接定义或 re-export）', async () => {
+test('chat.ts：导出 resolveUrl', async () => {
   const src = await readFile(new URL('../src/api/chat.ts', import.meta.url), 'utf-8')
-  assert.ok(
-    src.includes('export function resolveUrl') || src.includes('export { resolveUrl }'),
-    '应导出 resolveUrl',
-  )
+  assert.ok(src.includes('export function resolveUrl'), '应导出 resolveUrl')
 })
 
 test('ChatAttachment.vue 存在并暴露 attachments prop + resolveUrl', async () => {
@@ -316,8 +313,8 @@ test('ChatAttachment.vue 存在并暴露 attachments prop + resolveUrl', async (
   for (const m of ['image', 'audio', 'video', 'file']) {
     assert.ok(src.includes(`modality === '${m}'`), `应派发 modality === ${m}`)
   }
-  // resolveUrl 调用（已从 chat 模块迁至 utils/url，直接调用 resolveUrl 而非别名 resolve）
-  assert.ok(src.includes('resolveUrl('), '应调用 resolveUrl()')
+  // resolveUrl 调用
+  assert.ok(src.includes('resolve('), '应调用 resolve (resolveUrl 别名)')
 })
 
 test('types/chat.ts 暴露 ChatAttachment 新字段 + Message.attachments', async () => {

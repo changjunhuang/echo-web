@@ -354,11 +354,7 @@ test('chat.ts 源文件包含新协议关键字符串（防御性快照）', asy
     assert.ok(src.includes(`case '${t}':`), `handleFrame 应识别 type=${t}`)
   }
   // resolveUrl + onResource
-  // resolveUrl 已从 chat.ts 迁至 utils/url.ts，chat.ts 仅 re-export（兼容旧 import）
-  assert.ok(
-    src.includes('export function resolveUrl') || src.includes('export { resolveUrl }'),
-    '应导出 resolveUrl（直接定义或 re-export 均可）',
-  )
+  assert.ok(src.includes('export function resolveUrl'), '应导出 resolveUrl')
   assert.ok(src.includes('onResource?'), '应暴露 onResource 回调')
   // 已移除旧协议 finish/delta event 名
   assert.ok(!src.includes("event === 'finish'"), '不应再依赖 event === finish')

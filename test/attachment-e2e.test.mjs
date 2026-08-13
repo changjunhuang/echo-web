@@ -9,7 +9,6 @@ import http from 'node:http'
 
 const SOURCE_URL = new URL('../src/api/chat.ts', import.meta.url)
 const CHAT_ATTACHMENT_URL = new URL('../src/components/ChatAttachment.vue', import.meta.url)
-const DOWNLOAD_URL = new URL('../src/utils/download.ts', import.meta.url)
 const STORES_URL = new URL('../src/stores/chat.ts', import.meta.url)
 const CHAT_PAGE_URL = new URL('../src/views/chat/ChatPage.vue', import.meta.url)
 const TYPES_URL = new URL('../src/types/chat.ts', import.meta.url)
@@ -100,27 +99,15 @@ test('ChatAttachment.vue：四种 modality 派发', async () => {
 
 test('ChatAttachment.vue：调用 resolveUrl() 处理后端不带 scheme 的 URL', async () => {
   const src = await readFile(CHAT_ATTACHMENT_URL, 'utf-8')
-  // resolveUrl 已迁至 utils/url；ChatAttachment 直接从 utils 导入（兼容 chat.ts 的 re-export）
-  assert.ok(
-    src.includes("from '@/utils/url'") || src.includes("from '@/api/chat'"),
-    '应从 utils/url 或 api/chat 导入 resolveUrl',
-  )
-  assert.ok(src.includes('resolveUrl('), '应调用 resolveUrl()')
+  assert.ok(src.includes("from '@/api/chat'"), '应从 chat 模块导入')
+  assert.ok(src.includes('resolve('), '应调用 resolve() (即 resolveUrl)')
 })
 
-test('ChatAttachment.vue：download 委托给 downloadAsset()，实现细节下沉到 utils/download.ts', async () => {
-  const attachSrc = await readFile(CHAT_ATTACHMENT_URL, 'utf-8')
-  const dlSrc = await readFile(DOWNLOAD_URL, 'utf-8')
-  // 组件层：调用共享工具
-  assert.ok(attachSrc.includes('downloadAsset'), '组件层应调用 downloadAsset()')
-  assert.ok(
-    attachSrc.includes("from '@/utils/download'"),
-    '组件层应从 utils/download 导入',
-  )
-  // 实现下沉到 utils/download.ts
-  assert.ok(dlSrc.includes('URL.createObjectURL'), 'utils/download.ts 应走 blob URL')
-  assert.ok(dlSrc.includes('a.download'), 'utils/download.ts 应设置 a.download 触发下载')
-  assert.ok(dlSrc.includes('URL.revokeObjectURL'), 'utils/download.ts 应回收 blob URL')
+test('ChatAttachment.vue：download 走 fetch → blob 流程，跨域回退到 a[download]', async () => {
+  const src = await readFile(CHAT_ATTACHMENT_URL, 'utf-8')
+  assert.ok(src.includes('URL.createObjectURL(blob)'), '应走 blob URL')
+  assert.ok(src.includes('a.download = downloadName'), '应设置 a.download 触发下载')
+  assert.ok(src.includes('URL.revokeObjectURL'), '应回收 blob URL')
 })
 
 // ---------------------------------------------------------------------------

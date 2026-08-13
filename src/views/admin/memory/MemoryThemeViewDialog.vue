@@ -8,8 +8,7 @@ import { ref, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import type { RecallMemoryItem } from '@/api/memory'
 import { getMemoryDetail } from '@/api/memory'
-import { normalizeAssetUrl, resolveUrl } from '@/utils/url'
-import { downloadAsset } from '@/utils/download'
+import { normalizeAssetUrl } from '@/utils/url'
 import { copyToClipboard } from '@/utils/clipboard'
 import { DocumentCopy } from '@element-plus/icons-vue'
 
@@ -38,16 +37,21 @@ async function load() {
 }
 
 function downloadFile(fileName: string, url: string | undefined) {
-  if (!url) {
+  const assetUrl = normalizeAssetUrl(url)
+  if (!assetUrl) {
     ElMessage.warning('该文件无可用下载链接')
     return
   }
-  // 走统一的 downloadAsset：fetch → Blob → <a download>，失败降级 anchor
-  downloadAsset(resolveUrl(url), fileName).then((result) => {
-    if (result === 'fallback') {
-      ElMessage.error('下载失败，已在新窗口打开')
-    }
-  })
+  fetch(assetUrl)
+    .then((r) => r.blob())
+    .then((b) => {
+      const a = document.createElement('a')
+      a.href = URL.createObjectURL(b)
+      a.download = fileName
+      a.click()
+      URL.revokeObjectURL(a.href)
+    })
+    .catch(() => ElMessage.error('下载失败'))
 }
 
 function downloadMd() {

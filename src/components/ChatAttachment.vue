@@ -20,8 +20,7 @@
 import ChatImage from './ChatImage.vue'
 import { ElMessage } from 'element-plus'
 import { Download, View, CopyDocument } from '@element-plus/icons-vue'
-import { resolveUrl } from '@/utils/url'
-import { downloadAsset } from '@/utils/download'
+import { resolveUrl as resolve } from '@/api/chat'
 import type { ChatAttachment } from '@/types/chat'
 
 const props = withDefaults(
@@ -89,7 +88,7 @@ function canPreviewInBrowser(att: ChatAttachment): boolean {
 
 /** 解析后的最终 URL（已拼 https://） */
 function src(att: ChatAttachment): string {
-  return resolveUrl(att.url)
+  return resolve(att.url)
 }
 
 /** 在新标签页打开预览（不下载） */
@@ -149,11 +148,41 @@ async function handleDownload(att: ChatAttachment) {
     ElMessage.warning('该附件没有可下载的链接')
     return
   }
-  const result = await downloadAsset(url, downloadName)
-  if (result === 'blob') {
-    ElMessage.success(`已下载 ${downloadName}`)
+  try {
+    const res = await fetch(url, { mode: 'cors' })
+    if (res.ok) {
+      const blob = await res.blob()
+      const objectUrl = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = objectUrl
+      a.download = downloadName
+      a.style.display = 'none'
+      document.body.appendChild(a)
+      a.click()
+      document.body.removeChild(a)
+      setTimeout(() => URL.revokeObjectURL(objectUrl), 1000)
+      ElMessage.success(`已下载 ${downloadName}`)
+      console.info('[attachment] downloaded via blob: name=%s size=%d', downloadName, blob.size)
+      return
+    }
+    console.warn('[attachment] fetch returned %d, fallback to anchor: name=%s', res.status, downloadName)
+  } catch (err) {
+    console.warn(
+      '[attachment] fetch failed (likely CORS), fallback to anchor: name=%s, err=%s',
+      downloadName,
+      (err as Error)?.message ?? String(err),
+    )
   }
-  console.info('[attachment] download result=%s name=%s', result, downloadName)
+  const a = document.createElement('a')
+  a.href = url
+  if (/^https?:\/\//i.test(url)) a.download = downloadName
+  a.rel = 'noopener noreferrer'
+  a.target = '_blank'
+  a.style.display = 'none'
+  document.body.appendChild(a)
+  a.click()
+  document.body.removeChild(a)
+  console.info('[attachment] fallback download via anchor: name=%s', downloadName)
 }
 </script>
 
