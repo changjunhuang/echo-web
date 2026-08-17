@@ -7,12 +7,13 @@
  *       context          → RAG / 检索上下文摘要（{persona_len, l0_count, l1_count} + 方案 A 扩展 {persona, l0_items, l1_items}）
  *       resource         → 附件（图片/音频/视频/文件），可多次，按 file_id+chunk_index 去重
  *       tool             → 工具调用结果（{name, iter, ok, summary}）
- *       prefix           → 级联小模型前缀（{text}），流式逐字下发
- *       delta            → 大模型增量文本（{text}，必须 append）
+ *       presence         → 装饰性即时回应（{text}，方案A：首字到达前的心跳，不进 final_text）
+ *       delta            → 小模型流式正文增量（{text}，必须 append）
  *       done             → 整轮结束（{full} 已含完整文本与"附件：" markdown 段落）
  *       memory_extracted → 长期记忆抽取（{ok} 或 {ok:false, error}），仅 stream=false 时出现
  *       thinking         → 流式思考过程（{stage, text}），让前端能看到"AI 在干什么"
  *       memory_recall    → 回忆检索命中详情（{count, hits:[{memory_id, topic, summary, similarity}]}）
+ *       （旧 `prefix` 事件已随级联下线，前端保留 onPrefix 兼容处理）
  *   - 资源 URL **不带 scheme**（后端正则清掉 http/https/ //），前端必须调 resolveUrl() 拼接
  *
  * 关键实现：
@@ -309,7 +310,8 @@ export function sendChatMessage(payload: ChatRequest): Promise<ChatResponse> {
  *
  * options 形态（避免位置参数无限膨胀）：
  *   - onChunk:      每个 delta 增量片段（拼进 assistant 消息）
- *   - onPrefix:     级联小模型前缀（与 delta 走同一通道）
+ *   - onPrefix:     旧级联小模型前缀（与 delta 走同一通道；已停用，保留兼容）
+ *   - onPresence:   装饰性即时回应（{text}，方案A：首字到达前的心跳，不进 final_text）
  *   - onContext:    RAG / 检索上下文摘要（persona / L0 / L1 计数）
  *   - onTool:       工具调用结果（单条）
  *   - onResource:   附件资源（单条，按 file_id+chunk_index 去重由调用方负责）
@@ -324,6 +326,7 @@ export function sendChatMessage(payload: ChatRequest): Promise<ChatResponse> {
 export interface SendChatStreamOptions {
   onChunk?: (chunk: string) => void
   onPrefix?: (content: string) => void
+  onPresence?: (content: string) => void
   onContext?: (info: ChatContextInfo) => void
   onTool?: (toolCall: ChatToolCall) => void
   onResource?: (resource: ChatAttachment) => void
@@ -526,6 +529,14 @@ function handleFrame(
       if (text) {
         console.info('[sse] ← prefix, len=%d', text.length)
         h.onPrefix?.(text)
+      }
+      return
+    }
+    case 'presence': {
+      const text = extractText(obj)
+      if (text) {
+        console.info('[sse] ← presence, len=%d', text.length)
+        h.onPresence?.(text)
       }
       return
     }

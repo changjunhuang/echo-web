@@ -244,7 +244,15 @@
                   </div>
                   <!-- 普通文本消息 -->
                   <div v-else class="message-content">
-                    <span v-html="renderMarkdown(msg.content)" />
+                    <!--
+                      方案A：装饰性即时回应（presence）。
+                      首字到达前在气泡内展示一句"心跳"回应，正文开始后即消失，不进 final_text。
+                    -->
+                    <span
+                      v-if="msg.id === streamingMessageId && !msg.content && presenceText"
+                      class="message-presence"
+                    >{{ presenceText }}</span>
+                    <span v-if="msg.content" v-html="renderMarkdown(msg.content)" />
                     <!--
                       打字机光标：仅在当前正在流式输出的那条消息上显示。
                       streamingMessageId 由 handleSend 启动 typewriter 时设定，
@@ -726,6 +734,9 @@ const shouldResumeListening = ref(false)
  */
 const streamingMessageId = ref<string | null>(null)
 let typewriter: ReturnType<typeof createTypewriter> | null = null
+
+/** 方案A：装饰性即时回应（presence）。首个 delta 到达前在 assistant 气泡内展示，随后清空。 */
+const presenceText = ref('')
 
 function startStreamingTypewriter(messageId: string, sink: (chunk: string) => void) {
   if (typewriter) typewriter.stop(true)
@@ -1211,6 +1222,7 @@ async function handleSend() {
   }
 
   inputText.value = ''
+  presenceText.value = '' // 重置上一轮的装饰性回应
   // 由调用方决定消息来源（语音 / 键盘），默认 text
   const source = pendingSource.value
   pendingSource.value = 'text'
@@ -1265,12 +1277,18 @@ async function handleSend() {
     },
     {
       onChunk: async (chunk) => {
+        // 第一个 delta 到达：装饰性回应让位给真实正文
+        if (presenceText.value) presenceText.value = ''
         // 推到打字机队列，由节奏器决定何时 append。**不要**直接 appendToLastAssistantMessage
         if (typewriter) typewriter.push(chunk)
       },
-      // prefix 与 delta 走同一通道：拼进 assistant 消息（也走打字机）
+      // prefix 与 delta 走同一通道：拼进 assistant 消息（也走打字机）；旧级联已停用，保留兼容
       onPrefix: async (content) => {
         if (typewriter) typewriter.push(content)
+      },
+      // 方案A：装饰性即时回应（"我在呢~"等心跳），不进 final_text，首字到达前在气泡内展示
+      onPresence: (content) => {
+        presenceText.value = content
       },
       // RAG / 检索上下文摘要（persona / L0 / L1 计数）
       onContext: (info) => {
@@ -1315,6 +1333,7 @@ async function handleSend() {
         })
         // 收尾：思考打字机也 flush，确保已排队字符全部显示
         stopReasoningTypewriter(true)
+        presenceText.value = '' // 装饰性回应随流式结束清空
         chatStore.isStreaming = false
         abortController = null
         // 流式完成：若开启了自动播报，朗读最后一条 assistant 消息
@@ -2371,6 +2390,26 @@ const placeholderHint = computed(() => {
   background: rgba(255, 255, 255, 0.5);
   animation: pulse 1.4s ease-in-out infinite;
   margin: 0 0.2rem;
+}
+
+/* 方案A：装饰性即时回应（presence）——柔和、斜体，像"对方正在回应"的轻声提示 */
+.message-presence {
+  display: inline-block;
+  color: rgba(255, 255, 255, 0.6);
+  font-style: italic;
+  letter-spacing: 0.5px;
+  animation: presence-fade-in 0.25s ease-out;
+}
+
+@keyframes presence-fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(2px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 /* 打字机光标：渲染在 .message-content 末尾，仅在 streamingMessageId 命中时出现 */

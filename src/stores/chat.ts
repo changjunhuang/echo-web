@@ -261,11 +261,17 @@ export const useChatStore = defineStore('chat', () => {
     const last = session.messages[session.messages.length - 1]
     if (!last || last.role !== 'assistant') return
     const list = last.thinkings ?? []
-    // 同 stage 仅保留首条，避免重连或重复事件刷屏
-    if (list.some((t) => t.stage === ev.stage)) {
-      return
+    // model_reasoning 是流式逐 chunk 下发的多帧（同一 stage），需增量拼接成完整一段；
+    // 离散 stage（intent/context_build/recall_search/react_decision/cascade）每轮只发一帧，
+    // 合并后仍为一条，保持"同 stage 去重、防重连刷屏"的语义。
+    const idx = list.findIndex((t) => t.stage === ev.stage)
+    if (idx >= 0) {
+      const merged = [...list]
+      merged[idx] = { ...merged[idx], text: (merged[idx].text ?? '') + (ev.text ?? '') }
+      last.thinkings = merged
+    } else {
+      last.thinkings = [...list, { stage: ev.stage, text: ev.text }]
     }
-    last.thinkings = [...list, { stage: ev.stage, text: ev.text }]
     session.updatedAt = Date.now()
   }
 
